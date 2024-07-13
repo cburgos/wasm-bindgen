@@ -10,8 +10,8 @@
  * liability, trademark and document use rules apply.
  */
 
-callback DecodeSuccessCallback = void (AudioBuffer decodedData);
-callback DecodeErrorCallback = void (DOMException error);
+callback DecodeSuccessCallback = undefined (AudioBuffer decodedData);
+callback DecodeErrorCallback = undefined (DOMException error);
 
 enum AudioContextState {
     "suspended",
@@ -19,7 +19,6 @@ enum AudioContextState {
     "closed"
 };
 
-[RustDeprecated="doesn't exist in Safari, use `AudioContext` instead now"]
 interface BaseAudioContext : EventTarget {
 };
 
@@ -36,7 +35,7 @@ interface mixin rustBaseAudioContext {
     // Bug 1324552: readonly        attribute double               baseLatency;
 
     [Throws]
-    Promise<void> resume();
+    Promise<undefined> resume();
 
                     attribute EventHandler         onstatechange;
 

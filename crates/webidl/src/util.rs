@@ -1,23 +1,46 @@
+use std::collections::{BTreeSet, HashSet};
+use std::fs;
 use std::iter::FromIterator;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use heck::{CamelCase, ShoutySnakeCase, SnakeCase};
-use proc_macro2::{Ident, Span};
-use syn;
-use wasm_bindgen_backend::ast;
-use wasm_bindgen_backend::util::{ident_ty, leading_colon_path_ty, raw_ident, rust_ident};
-use weedle;
+use proc_macro2::{Ident, TokenStream};
+use quote::quote;
+use wasm_bindgen_backend::util::{ident_ty, raw_ident, rust_ident};
 use weedle::attribute::{ExtendedAttribute, ExtendedAttributeList, IdentifierOrString};
-use weedle::literal::{ConstValue, FloatLit, IntegerLit};
+use weedle::common::Identifier;
+use weedle::literal::{ConstValue as ConstValueLit, FloatLit, IntegerLit};
+use weedle::types::{MayBeNull, NonAnyType, SingleType};
 
+use crate::constants::{
+    BREAKING_GETTER_THROWS, BREAKING_SETTER_THROWS, FIXED_INTERFACES, IMMUTABLE_SLICE_WHITELIST,
+};
 use crate::first_pass::{FirstPassRecord, OperationData, OperationId, Signature};
+use crate::generator::{ConstValue, InterfaceMethod, InterfaceMethodKind};
 use crate::idl_type::{IdlType, ToIdlType};
+use crate::Options;
 
 /// For variadic operations an overload with a `js_sys::Array` argument is generated alongside with
 /// `operation_name_0`, `operation_name_1`, `operation_name_2`, ..., `operation_name_n` overloads
 /// which have the count of arguments for passing values to the variadic argument
 /// in their names, where `n` is this constant.
 const MAX_VARIADIC_ARGUMENTS_COUNT: usize = 7;
+
+/// Similar to std::fs::read_dir except it returns a sorted Vec,
+/// which is important to make the code generation deterministic.
+pub(crate) fn read_dir<P>(path: P) -> std::io::Result<Vec<PathBuf>>
+where
+    P: AsRef<Path>,
+{
+    let mut entries = fs::read_dir(path)?
+        .map(|entry| Ok(entry?.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+
+    entries.sort();
+
+    Ok(entries)
+}
 
 /// Take a type and create an immutable shared reference to that type.
 pub(crate) fn shared_ref(ty: syn::Type, mutable: bool) -> syn::Type {
@@ -64,7 +87,7 @@ pub fn mdn_doc(class: &str, method: Option<&str>) -> String {
     if let Some(method) = method {
         link.push_str(&format!("/{}", method));
     }
-    format!("[MDN Documentation]({})", link).into()
+    format!("[MDN Documentation]({})", link)
 }
 
 // Array type is borrowed for arguments (`&mut [T]` or `&[T]`) and owned for return value (`Vec<T>`).
@@ -81,39 +104,35 @@ pub(crate) fn array(base_ty: &str, pos: TypePosition, immutable: bool) -> syn::T
 }
 
 /// Map a webidl const value to the correct wasm-bindgen const value
-pub fn webidl_const_v_to_backend_const_v(v: &ConstValue) -> ast::ConstValue {
-    use std::f64::{INFINITY, NAN, NEG_INFINITY};
-
+pub fn webidl_const_v_to_backend_const_v(v: &ConstValueLit) -> ConstValue {
     match *v {
-        ConstValue::Boolean(b) => ast::ConstValue::BooleanLiteral(b.0),
-        ConstValue::Float(FloatLit::NegInfinity(_)) => ast::ConstValue::FloatLiteral(NEG_INFINITY),
-        ConstValue::Float(FloatLit::Infinity(_)) => ast::ConstValue::FloatLiteral(INFINITY),
-        ConstValue::Float(FloatLit::NaN(_)) => ast::ConstValue::FloatLiteral(NAN),
-        ConstValue::Float(FloatLit::Value(s)) => {
-            ast::ConstValue::FloatLiteral(s.0.parse().unwrap())
-        }
-        ConstValue::Integer(lit) => {
+        ConstValueLit::Boolean(b) => ConstValue::Boolean(b.0),
+        ConstValueLit::Float(FloatLit::NegInfinity(_)) => ConstValue::Float(f64::NEG_INFINITY),
+        ConstValueLit::Float(FloatLit::Infinity(_)) => ConstValue::Float(f64::INFINITY),
+        ConstValueLit::Float(FloatLit::NaN(_)) => ConstValue::Float(f64::NAN),
+        ConstValueLit::Float(FloatLit::Value(s)) => ConstValue::Float(s.0.parse().unwrap()),
+        ConstValueLit::Integer(lit) => {
             let mklit = |orig_text: &str, base: u32, offset: usize| {
-                let (negative, text) = if orig_text.starts_with("-") {
-                    (true, &orig_text[1..])
+                let (negative, text) = if let Some(text) = orig_text.strip_prefix('-') {
+                    (true, text)
                 } else {
                     (false, orig_text)
                 };
                 if text == "0" {
-                    return ast::ConstValue::SignedIntegerLiteral(0);
+                    return ConstValue::SignedInteger(0);
                 }
                 let text = &text[offset..];
                 let n = u64::from_str_radix(text, base)
                     .unwrap_or_else(|_| panic!("literal too big: {}", orig_text));
                 if negative {
-                    let n = if n > (i64::min_value() as u64).wrapping_neg() {
+                    let n = if n > (i64::MIN as u64).wrapping_neg() {
                         panic!("literal too big: {}", orig_text)
                     } else {
                         n.wrapping_neg() as i64
                     };
-                    ast::ConstValue::SignedIntegerLiteral(n)
+                    ConstValue::SignedInteger(n)
                 } else {
-                    ast::ConstValue::UnsignedIntegerLiteral(n)
+                    ConstValue::UnsignedInteger(n)
                 }
             };
             match lit {
@@ -122,53 +141,8 @@ pub fn webidl_const_v_to_backend_const_v(v: &ConstValue) -> ast::ConstValue {
                 IntegerLit::Dec(h) => mklit(h.0, 10, 0),
             }
         }
-        ConstValue::Null(_) => ast::ConstValue::Null,
+        ConstValueLit::Null(_) => unimplemented!(),
     }
-}
-
-/// From `ident` and `Ty`, create `ident: Ty` for use in e.g. `fn(ident: Ty)`.
-fn simple_fn_arg(ident: Ident, ty: syn::Type) -> syn::PatType {
-    syn::PatType {
-        pat: Box::new(syn::Pat::Ident(syn::PatIdent {
-            attrs: Vec::new(),
-            by_ref: None,
-            ident,
-            mutability: None,
-            subpat: None,
-        })),
-        colon_token: Default::default(),
-        ty: Box::new(ty),
-        attrs: Vec::new(),
-    }
-}
-
-/// Create `()`.
-fn unit_ty() -> syn::Type {
-    syn::Type::Tuple(syn::TypeTuple {
-        paren_token: Default::default(),
-        elems: syn::punctuated::Punctuated::new(),
-    })
-}
-
-/// From `T` create `Result<T, wasm_bindgen::JsValue>`.
-fn result_ty(t: syn::Type) -> syn::Type {
-    let js_value = leading_colon_path_ty(vec![rust_ident("wasm_bindgen"), rust_ident("JsValue")]);
-
-    let arguments = syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
-        colon2_token: None,
-        lt_token: Default::default(),
-        args: FromIterator::from_iter(vec![
-            syn::GenericArgument::Type(t),
-            syn::GenericArgument::Type(js_value),
-        ]),
-        gt_token: Default::default(),
-    });
-
-    let ident = raw_ident("Result");
-    let seg = syn::PathSegment { ident, arguments };
-    let path: syn::Path = seg.into();
-    let ty = syn::TypePath { qself: None, path };
-    ty.into()
 }
 
 /// From `T` create `[T]`.
@@ -220,201 +194,17 @@ pub enum TypePosition {
 }
 
 impl<'src> FirstPassRecord<'src> {
-    pub fn create_one_function<'a>(
-        &self,
-        js_name: &str,
-        rust_name: &str,
-        idl_arguments: impl Iterator<Item = (&'a str, &'a IdlType<'src>)>,
-        ret: &IdlType<'src>,
-        kind: ast::ImportFunctionKind,
-        structural: bool,
-        catch: bool,
-        variadic: bool,
-        doc_comment: Option<String>,
-    ) -> Option<ast::ImportFunction>
-    where
-        'src: 'a,
-    {
-        // Convert all of the arguments from their IDL type to a `syn` type,
-        // ready to pass to the backend.
-        //
-        // Note that for non-static methods we add a `&self` type placeholder,
-        // but this type isn't actually used so it's just here for show mostly.
-        let mut arguments = if let &ast::ImportFunctionKind::Method {
-            ref ty,
-            kind:
-                ast::MethodKind::Operation(ast::Operation {
-                    is_static: false, ..
-                }),
-            ..
-        } = &kind
-        {
-            let mut res = Vec::with_capacity(idl_arguments.size_hint().0 + 1);
-            res.push(simple_fn_arg(
-                raw_ident("self_"),
-                shared_ref(ty.clone(), false),
-            ));
-            res
-        } else {
-            Vec::with_capacity(idl_arguments.size_hint().0)
-        };
-        let idl_arguments: Vec<_> = idl_arguments.collect();
-        let arguments_count = idl_arguments.len();
-        for (i, (argument_name, idl_type)) in idl_arguments.into_iter().enumerate() {
-            let syn_type = match idl_type.to_syn_type(TypePosition::Argument) {
-                Some(t) => t,
-                None => {
-                    log::warn!(
-                        "Unsupported argument type: {:?} on {:?}",
-                        idl_type,
-                        rust_name
-                    );
-                    return None;
-                }
-            };
-            let syn_type = if variadic && i == arguments_count - 1 {
-                let path = vec![rust_ident("js_sys"), rust_ident("Array")];
-                shared_ref(leading_colon_path_ty(path), false)
-            } else {
-                syn_type
-            };
-            let argument_name = rust_ident(&argument_name.to_snake_case());
-            arguments.push(simple_fn_arg(argument_name, syn_type));
-        }
-
-        // Convert the return type to a `syn` type, handling the `catch`
-        // attribute here to use a `Result` in Rust.
-        let ret = match ret {
-            IdlType::Void => None,
-            ret @ _ => match ret.to_syn_type(TypePosition::Return) {
-                Some(ret) => Some(ret),
-                None => {
-                    log::warn!("Unsupported return type: {:?} on {:?}", ret, rust_name);
-                    return None;
-                }
-            },
-        };
-        let js_ret = ret.clone();
-        let ret = if catch {
-            Some(ret.map_or_else(|| result_ty(unit_ty()), result_ty))
-        } else {
-            ret
-        };
-
-        Some(ast::ImportFunction {
-            function: ast::Function {
-                name: js_name.to_string(),
-                name_span: Span::call_site(),
-                renamed_via_js_name: false,
-                arguments,
-                ret: ret.clone(),
-                rust_attrs: vec![],
-                rust_vis: public(),
-                r#async: false,
-            },
-            rust_name: rust_ident(rust_name),
-            js_ret: js_ret.clone(),
-            variadic,
-            catch,
-            structural,
-            assert_no_shim: false,
-            shim: {
-                let ns = match kind {
-                    ast::ImportFunctionKind::Normal => "",
-                    ast::ImportFunctionKind::Method { ref class, .. } => class,
-                };
-                raw_ident(&format!("__widl_f_{}_{}", rust_name, ns))
-            },
-            kind,
-            doc_comment,
-        })
-    }
-
-    /// Create a wasm-bindgen getter method, if possible.
-    pub fn create_getter(
-        &self,
-        name: &str,
-        ty: &weedle::types::Type<'src>,
-        self_name: &str,
-        is_static: bool,
-        attrs: &Option<ExtendedAttributeList>,
-        container_attrs: Option<&ExtendedAttributeList>,
-    ) -> Option<ast::ImportFunction> {
-        let kind = ast::OperationKind::Getter(Some(raw_ident(name)));
-        let kind = self.import_function_kind(self_name, is_static, kind);
-        let ret = ty.to_idl_type(self);
-        self.create_one_function(
-            &name,
-            &snake_case_ident(name),
-            None.into_iter(),
-            &ret,
-            kind,
-            is_structural(attrs.as_ref(), container_attrs),
-            throws(attrs),
-            false,
-            Some(format!(
-                "The `{}` getter\n\n{}",
-                name,
-                mdn_doc(self_name, Some(name))
-            )),
-        )
-    }
-
-    /// Create a wasm-bindgen setter method, if possible.
-    pub fn create_setter(
-        &self,
-        name: &str,
-        field_ty: &weedle::types::Type<'src>,
-        self_name: &str,
-        is_static: bool,
-        attrs: &Option<ExtendedAttributeList>,
-        container_attrs: Option<&ExtendedAttributeList>,
-    ) -> Option<ast::ImportFunction> {
-        let kind = ast::OperationKind::Setter(Some(raw_ident(name)));
-        let kind = self.import_function_kind(self_name, is_static, kind);
-        let field_ty = field_ty.to_idl_type(self);
-        self.create_one_function(
-            &name,
-            &format!("set_{}", name).to_snake_case(),
-            Some((name, &field_ty)).into_iter(),
-            &IdlType::Void,
-            kind,
-            is_structural(attrs.as_ref(), container_attrs),
-            throws(attrs),
-            false,
-            Some(format!(
-                "The `{}` setter\n\n{}",
-                name,
-                mdn_doc(self_name, Some(name))
-            )),
-        )
-    }
-
-    pub fn import_function_kind(
-        &self,
-        self_name: &str,
-        is_static: bool,
-        operation_kind: ast::OperationKind,
-    ) -> ast::ImportFunctionKind {
-        let operation = ast::Operation {
-            is_static,
-            kind: operation_kind,
-        };
-        let ty = ident_ty(rust_ident(camel_case_ident(&self_name).as_str()));
-        ast::ImportFunctionKind::Method {
-            class: self_name.to_string(),
-            ty,
-            kind: ast::MethodKind::Operation(operation),
-        }
-    }
-
     pub fn create_imports(
         &self,
+        type_name: Option<&str>,
         container_attrs: Option<&ExtendedAttributeList<'src>>,
-        kind: ast::ImportFunctionKind,
         id: &OperationId<'src>,
         data: &OperationData<'src>,
-    ) -> Vec<ast::ImportFunction> {
+        unstable: bool,
+        unstable_types: &HashSet<Identifier>,
+    ) -> Vec<InterfaceMethod> {
+        let is_static = data.is_static;
+
         // First up, prune all signatures that reference unsupported arguments.
         // We won't consider these until said arguments are implemented.
         //
@@ -424,7 +214,7 @@ impl<'src> FirstPassRecord<'src> {
         // signature where that and all remaining optional arguments are
         // undefined.
         let mut signatures = Vec::new();
-        'outer: for signature in data.signatures.iter() {
+        for signature in data.signatures.iter() {
             let mut idl_args = Vec::with_capacity(signature.args.len());
             for (i, arg) in signature.args.iter().enumerate() {
                 if arg.optional {
@@ -476,7 +266,11 @@ impl<'src> FirstPassRecord<'src> {
                 // in-place, but all other flattened types will cause new
                 // signatures to be created.
                 let cur = actual_signatures.len();
-                for (j, idl_type) in idl_type.flatten().into_iter().enumerate() {
+                for (j, idl_type) in idl_type
+                    .flatten(signature.attrs.as_ref())
+                    .into_iter()
+                    .enumerate()
+                {
                     for k in start..cur {
                         if j == 0 {
                             actual_signatures[k].args.push(idl_type.clone());
@@ -492,7 +286,7 @@ impl<'src> FirstPassRecord<'src> {
             }
         }
 
-        let (name, force_structural, force_throws) = match id {
+        let (name, kind, force_structural, force_throws) = match id {
             // Constructors aren't annotated with `[Throws]` extended attributes
             // (how could they be, since they themselves are extended
             // attributes?) so we must conservatively assume that they can
@@ -505,15 +299,29 @@ impl<'src> FirstPassRecord<'src> {
             // > value of a type corresponding to the interface the
             // > `[Constructor]` extended attribute appears on, **or throw an
             // > exception**.
-            OperationId::Constructor(_) => ("new", false, true),
-            OperationId::Operation(Some(s)) => (*s, false, false),
+            OperationId::Constructor(_) => {
+                ("new", InterfaceMethodKind::Constructor(None), false, true)
+            }
+            OperationId::NamedConstructor(n) => (
+                "new",
+                InterfaceMethodKind::Constructor(Some(n.0.to_string())),
+                false,
+                true,
+            ),
+            OperationId::Operation(Some(s)) => (*s, InterfaceMethodKind::Regular, false, false),
             OperationId::Operation(None) => {
                 log::warn!("unsupported unnamed operation");
                 return Vec::new();
             }
-            OperationId::IndexingGetter => ("get", true, false),
-            OperationId::IndexingSetter => ("set", true, false),
-            OperationId::IndexingDeleter => ("delete", true, false),
+            OperationId::IndexingGetter => {
+                ("get", InterfaceMethodKind::IndexingGetter, true, false)
+            }
+            OperationId::IndexingSetter => {
+                ("set", InterfaceMethodKind::IndexingSetter, true, false)
+            }
+            OperationId::IndexingDeleter => {
+                ("delete", InterfaceMethodKind::IndexingDeleter, true, false)
+            }
         };
 
         let mut ret = Vec::new();
@@ -535,10 +343,10 @@ impl<'src> FirstPassRecord<'src> {
                 let mut any_different = false;
                 let arg_name = signature.orig.args[i].name;
                 for other in actual_signatures.iter() {
-                    if other.orig.args.get(i).map(|s| s.name) == Some(arg_name) {
-                        if !ptr::eq(signature, other) {
-                            any_same_name = true;
-                        }
+                    if other.orig.args.get(i).map(|s| s.name) == Some(arg_name)
+                        && !ptr::eq(signature, other)
+                    {
+                        any_same_name = true;
                     }
                     if let Some(other) = other.args.get(i) {
                         if other != arg {
@@ -579,7 +387,23 @@ impl<'src> FirstPassRecord<'src> {
             }
             let structural =
                 force_structural || is_structural(signature.orig.attrs.as_ref(), container_attrs);
-            let catch = force_throws || throws(&signature.orig.attrs);
+            let catch = force_throws || throws(signature.orig.attrs);
+            let ret_ty = if id == &OperationId::IndexingGetter {
+                // All indexing getters should return optional values (or
+                // otherwise be marked with catch).
+                match ret_ty {
+                    IdlType::Nullable(_) => ret_ty,
+                    ref ty => {
+                        if catch {
+                            ret_ty
+                        } else {
+                            IdlType::Nullable(Box::new(ty.clone()))
+                        }
+                    }
+                }
+            } else {
+                ret_ty
+            };
             let variadic = signature.args.len() == signature.orig.args.len()
                 && signature
                     .orig
@@ -587,52 +411,103 @@ impl<'src> FirstPassRecord<'src> {
                     .last()
                     .map(|arg| arg.variadic)
                     .unwrap_or(false);
-            ret.extend(
-                self.create_one_function(
-                    name,
-                    &rust_name,
-                    signature
-                        .args
-                        .iter()
-                        .zip(&signature.orig.args)
-                        .map(|(idl_type, orig_arg)| (orig_arg.name, idl_type)),
-                    &ret_ty,
-                    kind.clone(),
-                    structural,
-                    catch,
-                    variadic,
-                    None,
-                ),
+
+            fn idl_arguments<'a>(
+                args: impl Iterator<Item = (String, &'a IdlType<'a>)>,
+            ) -> Option<Vec<(Ident, syn::Type)>> {
+                let mut output = vec![];
+
+                for (name, idl_type) in args {
+                    let ty = match idl_type.to_syn_type(TypePosition::Argument) {
+                        Ok(ty) => ty.unwrap(),
+                        Err(_) => {
+                            return None;
+                        }
+                    };
+
+                    output.push((rust_ident(&snake_case_ident(&name[..])), ty));
+                }
+
+                Some(output)
+            }
+
+            let arguments = idl_arguments(
+                signature
+                    .args
+                    .iter()
+                    .zip(&signature.orig.args)
+                    .map(|(idl_type, orig_arg)| (orig_arg.name.to_string(), idl_type)),
             );
+
+            // Stable types can have methods that have unstable argument types.
+            // If any of the arguments types are `unstable` then this method is downgraded
+            // to be unstable.
+            let has_unstable_args = signature
+                .args
+                .iter()
+                .any(|arg| is_idl_type_unstable(arg, unstable_types));
+
+            let unstable = unstable || data.stability.is_unstable() || has_unstable_args;
+
+            if let Some(arguments) = arguments {
+                if let Ok(ret_ty) = ret_ty.to_syn_type(TypePosition::Return) {
+                    ret.push(InterfaceMethod {
+                        name: rust_ident(&rust_name),
+                        js_name: name.to_string(),
+                        arguments,
+                        ret_ty,
+                        kind: kind.clone(),
+                        is_static,
+                        structural,
+                        catch,
+                        variadic,
+                        unstable,
+                    });
+                }
+            }
+
             if !variadic {
                 continue;
             }
             let last_idl_type = &signature.args[signature.args.len() - 1];
             let last_name = signature.orig.args[signature.args.len() - 1].name;
             for i in 0..=MAX_VARIADIC_ARGUMENTS_COUNT {
-                ret.extend(
-                    self.create_one_function(
-                        name,
-                        &format!("{}_{}", rust_name, i),
-                        signature.args[..signature.args.len() - 1]
-                            .iter()
-                            .zip(&signature.orig.args)
-                            .map(|(idl_type, orig_arg)| (orig_arg.name.to_string(), idl_type))
-                            .chain((1..=i).map(|j| (format!("{}_{}", last_name, j), last_idl_type)))
-                            .collect::<Vec<_>>()
-                            .iter()
-                            .map(|(name, idl_type)| (&name[..], idl_type.clone())),
-                        &ret_ty,
-                        kind.clone(),
-                        structural,
-                        catch,
-                        false,
-                        None,
-                    ),
+                let arguments = idl_arguments(
+                    signature.args[..signature.args.len() - 1]
+                        .iter()
+                        .zip(&signature.orig.args)
+                        .map(|(idl_type, orig_arg)| (orig_arg.name.to_string(), idl_type))
+                        .chain((1..=i).map(|j| (format!("{}_{}", last_name, j), last_idl_type))),
                 );
+
+                if let Some(arguments) = arguments {
+                    if let Ok(ret_ty) = ret_ty.to_syn_type(TypePosition::Return) {
+                        ret.push(InterfaceMethod {
+                            name: rust_ident(&format!("{}_{}", rust_name, i)),
+                            js_name: name.to_string(),
+                            arguments,
+                            kind: kind.clone(),
+                            ret_ty,
+                            is_static,
+                            structural,
+                            catch,
+                            variadic: false,
+                            unstable,
+                        });
+                    }
+                }
             }
         }
-        return ret;
+
+        for interface in &mut ret {
+            if let Some(map) = type_name.and_then(|type_name| FIXED_INTERFACES.get(type_name)) {
+                if let Some(fixed) = map.get(&interface.name.to_string().as_ref()) {
+                    interface.name = rust_ident(fixed);
+                }
+            }
+        }
+
+        ret
     }
 
     /// When generating our web_sys APIs we default to setting slice references that
@@ -648,14 +523,34 @@ impl<'src> FirstPassRecord<'src> {
     fn maybe_adjust<'a>(&self, mut idl_type: IdlType<'a>, id: &'a OperationId) -> IdlType<'a> {
         let op = match id {
             OperationId::Operation(Some(op)) => op,
+            OperationId::Constructor(Some(op)) => op,
             _ => return idl_type,
         };
 
-        if self.immutable_slice_whitelist.contains(op) {
+        if IMMUTABLE_SLICE_WHITELIST.contains(op) {
             flag_slices_immutable(&mut idl_type)
         }
 
         idl_type
+    }
+}
+
+pub fn is_type_unstable(ty: &weedle::types::Type, unstable_types: &HashSet<Identifier>) -> bool {
+    match ty {
+        weedle::types::Type::Single(SingleType::NonAny(NonAnyType::Identifier(i))) => {
+            // Check if the type in the unstable type list
+            unstable_types.contains(&i.type_)
+        }
+        _ => false,
+    }
+}
+
+fn is_idl_type_unstable(ty: &IdlType, unstable_types: &HashSet<Identifier>) -> bool {
+    match ty {
+        IdlType::Dictionary(name) | IdlType::Interface(name) => {
+            unstable_types.contains(&Identifier(name))
+        }
+        _ => false,
     }
 }
 
@@ -704,11 +599,10 @@ pub fn get_rust_deprecated<'a>(ext_attrs: &Option<ExtendedAttributeList<'a>>) ->
             _ => None,
         })
         .filter(|attr| attr.lhs_identifier.0 == "RustDeprecated")
-        .filter_map(|ident| match ident.rhs {
+        .find_map(|ident| match ident.rhs {
             IdentifierOrString::String(s) => Some(s),
             IdentifierOrString::Identifier(_) => None,
         })
-        .next()
         .map(|s| s.0)
 }
 
@@ -730,11 +624,34 @@ pub fn throws(attrs: &Option<ExtendedAttributeList>) -> bool {
     has_named_attribute(attrs.as_ref(), "Throws")
 }
 
-/// Create a syn `pub` token
-pub fn public() -> syn::Visibility {
-    syn::Visibility::Public(syn::VisPublic {
-        pub_token: Default::default(),
-    })
+/// Whether a getter is marked as throwing.
+pub fn getter_throws(
+    parent_js_name: &str,
+    js_name: &str,
+    attrs: &Option<ExtendedAttributeList>,
+) -> bool {
+    if let Some(parent) = BREAKING_GETTER_THROWS.get(parent_js_name) {
+        if parent.contains(&js_name) {
+            return false;
+        }
+    }
+
+    has_named_attribute(attrs.as_ref(), "GetterThrows")
+}
+
+/// Whether a setter is marked as throwing.
+pub fn setter_throws(
+    parent_js_name: &str,
+    js_name: &str,
+    attrs: &Option<ExtendedAttributeList>,
+) -> bool {
+    if let Some(parent) = BREAKING_SETTER_THROWS.get(parent_js_name) {
+        if parent.contains(&js_name) {
+            return false;
+        }
+    }
+
+    has_named_attribute(attrs.as_ref(), "SetterThrows")
 }
 
 fn flag_slices_immutable(ty: &mut IdlType) {
@@ -766,4 +683,83 @@ fn flag_slices_immutable(ty: &mut IdlType) {
         // catch-all for everything else like Object
         _ => {}
     }
+}
+
+pub fn required_doc_string(options: &Options, features: &BTreeSet<String>) -> Option<String> {
+    if !options.features || features.is_empty() {
+        return None;
+    }
+    let list = features
+        .iter()
+        .map(|ident| format!("`{}`", ident))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "\n\n*This API requires the following crate features \
+         to be activated: {}*",
+        list,
+    ))
+}
+
+pub fn get_cfg_features(options: &Options, features: &BTreeSet<String>) -> Option<syn::Attribute> {
+    let len = features.len();
+
+    if !options.features || len == 0 {
+        None
+    } else {
+        let features = features
+            .iter()
+            .map(|feature| quote!( feature = #feature, ))
+            .collect::<TokenStream>();
+
+        // This is technically unneeded but it generates more idiomatic code
+        if len == 1 {
+            Some(syn::parse_quote!( #[cfg(#features)] ))
+        } else {
+            Some(syn::parse_quote!( #[cfg(all(#features))] ))
+        }
+    }
+}
+
+pub fn nullable(mut ty: weedle::types::Type) -> weedle::types::Type {
+    use weedle::types::Type;
+
+    fn make_nullable<T>(mb: &mut MayBeNull<T>) {
+        mb.q_mark = Some(weedle::term::QMark);
+    }
+
+    match &mut ty {
+        Type::Single(SingleType::Any(_) | SingleType::NonAny(NonAnyType::Promise(_))) => (),
+        Type::Single(SingleType::NonAny(NonAnyType::Integer(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::FloatingPoint(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Boolean(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Byte(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Octet(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::ByteString(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::DOMString(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::USVString(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Sequence(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Object(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Symbol(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Error(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::ArrayBuffer(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::DataView(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Int8Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Int16Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Int32Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Uint8Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Uint16Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Uint32Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Uint8ClampedArray(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Float32Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Float64Array(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::ArrayBufferView(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::BufferSource(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::FrozenArrayType(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::RecordType(mb))) => make_nullable(mb),
+        Type::Single(SingleType::NonAny(NonAnyType::Identifier(mb))) => make_nullable(mb),
+        Type::Union(mb) => make_nullable(mb),
+    }
+
+    ty
 }

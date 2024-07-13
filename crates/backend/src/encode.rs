@@ -9,8 +9,15 @@ use std::path::PathBuf;
 use crate::ast;
 use crate::Diagnostic;
 
+#[derive(Clone)]
+pub enum EncodeChunk {
+    EncodedBuf(Vec<u8>),
+    StrExpr(syn::Expr),
+    // TODO: support more expr type;
+}
+
 pub struct EncodeResult {
-    pub custom_section: Vec<u8>,
+    pub custom_section: Vec<EncodeChunk>,
     pub included_files: Vec<PathBuf>,
 }
 
@@ -48,11 +55,15 @@ struct LocalFile {
 
 impl Interner {
     fn new() -> Interner {
+        let root = env::var_os("CARGO_MANIFEST_DIR")
+            .expect("should have CARGO_MANIFEST_DIR env var")
+            .into();
+        let crate_name = env::var("CARGO_PKG_NAME").expect("should have CARGO_PKG_NAME env var");
         Interner {
             bump: bumpalo::Bump::new(),
             files: RefCell::new(HashMap::new()),
-            root: env::var_os("CARGO_MANIFEST_DIR").unwrap().into(),
-            crate_name: env::var("CARGO_PKG_NAME").unwrap(),
+            root,
+            crate_name,
             has_package_json: Cell::new(false),
         }
     }
@@ -64,8 +75,8 @@ impl Interner {
     fn intern_str(&self, s: &str) -> &str {
         // NB: eventually this could be used to intern `s` to only allocate one
         // copy, but for now let's just "transmute" `s` to have the same
-        // lifetmie as this struct itself (which is our main goal here)
-        bumpalo::collections::String::from_str_in(s, &self.bump).into_bump_str()
+        // lifetime as this struct itself (which is our main goal here)
+        self.bump.alloc_str(s)
     }
 
     /// Given an import to a local module `id` this generates a unique module id
@@ -73,19 +84,19 @@ impl Interner {
     ///
     /// Note that repeated invocations of this function will be memoized, so the
     /// same `id` will always return the same resulting unique `id`.
-    fn resolve_import_module(&self, id: &str, span: Span) -> Result<&str, Diagnostic> {
+    fn resolve_import_module(&self, id: &str, span: Span) -> Result<ImportModule, Diagnostic> {
         let mut files = self.files.borrow_mut();
         if let Some(file) = files.get(id) {
-            return Ok(self.intern_str(&file.new_identifier));
+            return Ok(ImportModule::Named(self.intern_str(&file.new_identifier)));
         }
         self.check_for_package_json();
-        let path = if id.starts_with("/") {
-            self.root.join(&id[1..])
+        let path = if let Some(id) = id.strip_prefix('/') {
+            self.root.join(id)
         } else if id.starts_with("./") || id.starts_with("../") {
             let msg = "relative module paths aren't supported yet";
             return Err(Diagnostic::span_error(span, msg));
         } else {
-            return Ok(self.intern_str(&id));
+            return Ok(ImportModule::RawNamed(self.intern_str(id)));
         };
 
         // Generate a unique ID which is somewhat readable as well, so mix in
@@ -140,8 +151,14 @@ fn shared_program<'a>(
         typescript_custom_sections: prog
             .typescript_custom_sections
             .iter()
-            .map(|x| -> &'a str { &x })
+            .map(|x| shared_lit_or_expr(x, intern))
             .collect(),
+        linked_modules: prog
+            .linked_modules
+            .iter()
+            .enumerate()
+            .map(|(i, a)| shared_linked_module(&prog.link_function_name(i), a, intern))
+            .collect::<Result<Vec<_>, _>>()?,
         local_modules: intern
             .files
             .borrow()
@@ -176,13 +193,10 @@ fn shared_export<'a>(
     export: &'a ast::Export,
     intern: &'a Interner,
 ) -> Result<Export<'a>, Diagnostic> {
-    let consumed = match export.method_self {
-        Some(ast::MethodSelf::ByValue) => true,
-        _ => false,
-    };
+    let consumed = matches!(export.method_self, Some(ast::MethodSelf::ByValue));
     let method_kind = from_ast_method_kind(&export.function, intern, &export.method_kind)?;
     Ok(Export {
-        class: export.js_class.as_ref().map(|s| &**s),
+        class: export.js_class.as_deref(),
         comments: export.comments.iter().map(|s| &**s).collect(),
         consumed,
         function: shared_function(&export.function, intern),
@@ -198,26 +212,31 @@ fn shared_function<'a>(func: &'a ast::Function, _intern: &'a Interner) -> Functi
         .enumerate()
         .map(|(idx, arg)| {
             if let syn::Pat::Ident(x) = &*arg.pat {
-                return x.ident.to_string()
+                return x.ident.to_string();
             }
             format!("arg{}", idx)
         })
         .collect::<Vec<_>>();
     Function {
         arg_names,
+        asyncness: func.r#async,
         name: &func.name,
+        generate_typescript: func.generate_typescript,
+        generate_jsdoc: func.generate_jsdoc,
+        variadic: func.variadic,
     }
 }
 
 fn shared_enum<'a>(e: &'a ast::Enum, intern: &'a Interner) -> Enum<'a> {
     Enum {
-        name: intern.intern(&e.name),
+        name: &e.js_name,
         variants: e
             .variants
             .iter()
             .map(|v| shared_variant(v, intern))
             .collect(),
         comments: e.comments.iter().map(|s| &**s).collect(),
+        generate_typescript: e.generate_typescript,
     }
 }
 
@@ -225,21 +244,48 @@ fn shared_variant<'a>(v: &'a ast::Variant, intern: &'a Interner) -> EnumVariant<
     EnumVariant {
         name: intern.intern(&v.name),
         value: v.value,
+        comments: v.comments.iter().map(|s| &**s).collect(),
     }
 }
 
 fn shared_import<'a>(i: &'a ast::Import, intern: &'a Interner) -> Result<Import<'a>, Diagnostic> {
     Ok(Import {
-        module: match &i.module {
-            ast::ImportModule::Named(m, span) => {
-                ImportModule::Named(intern.resolve_import_module(m, *span)?)
-            }
-            ast::ImportModule::RawNamed(m, _span) => ImportModule::RawNamed(intern.intern_str(m)),
-            ast::ImportModule::Inline(idx, _) => ImportModule::Inline(*idx as u32),
-            ast::ImportModule::None => ImportModule::None,
-        },
-        js_namespace: i.js_namespace.as_ref().map(|s| intern.intern(s)),
+        module: i
+            .module
+            .as_ref()
+            .map(|m| shared_module(m, intern))
+            .transpose()?,
+        js_namespace: i.js_namespace.clone(),
         kind: shared_import_kind(&i.kind, intern)?,
+    })
+}
+
+fn shared_lit_or_expr<'a>(i: &'a ast::LitOrExpr, _intern: &'a Interner) -> LitOrExpr<'a> {
+    match i {
+        ast::LitOrExpr::Lit(lit) => LitOrExpr::Lit(lit),
+        ast::LitOrExpr::Expr(expr) => LitOrExpr::Expr(expr),
+    }
+}
+
+fn shared_linked_module<'a>(
+    name: &str,
+    i: &'a ast::ImportModule,
+    intern: &'a Interner,
+) -> Result<LinkedModule<'a>, Diagnostic> {
+    Ok(LinkedModule {
+        module: shared_module(i, intern)?,
+        link_function_name: intern.intern_str(name),
+    })
+}
+
+fn shared_module<'a>(
+    m: &'a ast::ImportModule,
+    intern: &'a Interner,
+) -> Result<ImportModule<'a>, Diagnostic> {
+    Ok(match m {
+        ast::ImportModule::Named(m, span) => intern.resolve_import_module(m, *span)?,
+        ast::ImportModule::RawNamed(m, _span) => ImportModule::RawNamed(intern.intern_str(m)),
+        ast::ImportModule::Inline(idx, _) => ImportModule::Inline(*idx as u32),
     })
 }
 
@@ -293,8 +339,8 @@ fn shared_import_type<'a>(i: &'a ast::ImportType, intern: &'a Interner) -> Impor
     }
 }
 
-fn shared_import_enum<'a>(_i: &'a ast::ImportEnum, _intern: &'a Interner) -> ImportEnum {
-    ImportEnum {}
+fn shared_import_enum<'a>(_i: &'a ast::StringEnum, _intern: &'a Interner) -> StringEnum {
+    StringEnum {}
 }
 
 fn shared_struct<'a>(s: &'a ast::Struct, intern: &'a Interner) -> Struct<'a> {
@@ -306,17 +352,18 @@ fn shared_struct<'a>(s: &'a ast::Struct, intern: &'a Interner) -> Struct<'a> {
             .map(|s| shared_struct_field(s, intern))
             .collect(),
         comments: s.comments.iter().map(|s| &**s).collect(),
+        is_inspectable: s.is_inspectable,
+        generate_typescript: s.generate_typescript,
     }
 }
 
-fn shared_struct_field<'a>(s: &'a ast::StructField, intern: &'a Interner) -> StructField<'a> {
+fn shared_struct_field<'a>(s: &'a ast::StructField, _intern: &'a Interner) -> StructField<'a> {
     StructField {
-        name: match &s.name {
-            syn::Member::Named(ident) => intern.intern(ident),
-            syn::Member::Unnamed(index) => intern.intern_str(&index.index.to_string()),
-        },
+        name: &s.js_name,
         readonly: s.readonly,
         comments: s.comments.iter().map(|s| &**s).collect(),
+        generate_typescript: s.generate_typescript,
+        generate_jsdoc: s.generate_jsdoc,
     }
 }
 
@@ -325,27 +372,48 @@ trait Encode {
 }
 
 struct Encoder {
-    dst: Vec<u8>,
+    dst: Vec<EncodeChunk>,
+}
+
+enum LitOrExpr<'a> {
+    Expr(&'a syn::Expr),
+    Lit(&'a str),
+}
+
+impl<'a> Encode for LitOrExpr<'a> {
+    fn encode(&self, dst: &mut Encoder) {
+        match self {
+            LitOrExpr::Expr(expr) => {
+                dst.dst.push(EncodeChunk::StrExpr((*expr).clone()));
+            }
+            LitOrExpr::Lit(s) => s.encode(dst),
+        }
+    }
 }
 
 impl Encoder {
     fn new() -> Encoder {
-        Encoder {
-            dst: vec![0, 0, 0, 0],
-        }
+        Encoder { dst: vec![] }
     }
 
-    fn finish(mut self) -> Vec<u8> {
-        let len = self.dst.len() - 4;
-        self.dst[0] = (len >> 0) as u8;
-        self.dst[1] = (len >> 8) as u8;
-        self.dst[2] = (len >> 16) as u8;
-        self.dst[3] = (len >> 24) as u8;
+    fn finish(self) -> Vec<EncodeChunk> {
         self.dst
     }
 
     fn byte(&mut self, byte: u8) {
-        self.dst.push(byte);
+        if let Some(EncodeChunk::EncodedBuf(buf)) = self.dst.last_mut() {
+            buf.push(byte);
+        } else {
+            self.dst.push(EncodeChunk::EncodedBuf(vec![byte]));
+        }
+    }
+
+    fn extend_from_slice(&mut self, slice: &[u8]) {
+        if let Some(EncodeChunk::EncodedBuf(buf)) = self.dst.last_mut() {
+            buf.extend_from_slice(slice);
+        } else {
+            self.dst.push(EncodeChunk::EncodedBuf(slice.to_owned()));
+        }
     }
 }
 
@@ -369,7 +437,7 @@ impl Encode for u32 {
 
 impl Encode for usize {
     fn encode(&self, dst: &mut Encoder) {
-        assert!(*self <= u32::max_value() as usize);
+        assert!(*self <= u32::MAX as usize);
         (*self as u32).encode(dst);
     }
 }
@@ -377,7 +445,7 @@ impl Encode for usize {
 impl<'a> Encode for &'a [u8] {
     fn encode(&self, dst: &mut Encoder) {
         self.len().encode(dst);
-        dst.dst.extend_from_slice(*self);
+        dst.extend_from_slice(self);
     }
 }
 
@@ -387,7 +455,7 @@ impl<'a> Encode for &'a str {
     }
 }
 
-impl<'a> Encode for String {
+impl Encode for String {
     fn encode(&self, dst: &mut Encoder) {
         self.as_bytes().encode(dst);
     }
@@ -501,12 +569,12 @@ fn from_ast_method_kind<'a>(
             let is_static = *is_static;
             let kind = match kind {
                 ast::OperationKind::Getter(g) => {
-                    let g = g.as_ref().map(|g| intern.intern(g));
+                    let g = g.as_ref().map(|g| intern.intern_str(g));
                     OperationKind::Getter(g.unwrap_or_else(|| function.infer_getter_property()))
                 }
                 ast::OperationKind::Regular => OperationKind::Regular,
                 ast::OperationKind::Setter(s) => {
-                    let s = s.as_ref().map(|s| intern.intern(s));
+                    let s = s.as_ref().map(|s| intern.intern_str(s));
                     OperationKind::Setter(match s {
                         Some(s) => s,
                         None => intern.intern_str(&function.infer_setter_property()?),

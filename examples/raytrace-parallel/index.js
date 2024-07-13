@@ -12,8 +12,7 @@ concurrency.disabled = true;
 
 // First up, but try to do feature detection to provide better error messages
 function loadWasm() {
-  let msg = 'This demo currently requires Firefox Nightly (64.0) with\n'
-  msg += 'the `javascript.options.shared_memory` option enabled in `about:config`';
+  let msg = 'This demo requires a current version of Firefox (e.g., 79.0)';
   if (typeof SharedArrayBuffer !== 'function') {
     alert('this browser does not have SharedArrayBuffer support enabled' + '\n\n' + msg);
     return
@@ -27,7 +26,7 @@ function loadWasm() {
     return
   }
 
-  wasm_bindgen('./raytrace_parallel_bg.wasm')
+  wasm_bindgen()
     .then(run)
     .catch(console.error);
 }

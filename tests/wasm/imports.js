@@ -105,3 +105,42 @@ exports.assert_dead_import_not_generated = function() {
 exports.import_inside_function_works = function() {};
 exports.import_inside_private_module = function() {};
 exports.should_call_undefined_functions = () => false;
+
+exports.STATIC_STRING = 'x';
+
+class StaticMethodCheck {
+  static static_method_of_right_this() {
+    assert.ok(this === StaticMethodCheck);
+  }
+}
+
+exports.StaticMethodCheck = StaticMethodCheck;
+
+exports.receive_undefined = val => {
+  assert.strictEqual(val, undefined);
+};
+
+const VAL = {};
+
+exports.receive_some = val => {
+  assert.strictEqual(val, VAL);
+};
+
+exports.get_some_val = () => VAL;
+
+exports.Math = {
+  func_from_module_math: (a) => a * 2
+}
+
+exports.Number = {
+  func_from_module_number: () => 3.0
+}
+
+exports.same_name_from_import = (a) => a * 3;
+
+exports.same_js_namespace_from_module = {
+  func_from_module_1_same_js_namespace: (a) => a * 5
+}
+
+exports["kebab-case"] = () => 42;
+exports["\"string'literal\nbreakers\r"] = () => 42;

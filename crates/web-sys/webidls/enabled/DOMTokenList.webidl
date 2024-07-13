@@ -10,14 +10,16 @@
  * liability, trademark and document use rules apply.
  */
 
+// updated using https://dom.spec.whatwg.org/#interface-domtokenlist
+
 interface DOMTokenList {
   readonly attribute unsigned long length;
   getter DOMString? item(unsigned long index);
   boolean contains(DOMString token);
   [CEReactions, Throws]
-  void add(DOMString... tokens);
+  undefined add(DOMString... tokens);
   [CEReactions, Throws]
-  void remove(DOMString... tokens);
+  undefined remove(DOMString... tokens);
   [CEReactions, Throws]
   boolean replace(DOMString token, DOMString newToken);
   [CEReactions, Throws]
@@ -27,5 +29,5 @@ interface DOMTokenList {
   [CEReactions, SetterThrows]
   attribute DOMString value;
   stringifier DOMString ();
-  iterable<DOMString?>;
+  iterable<DOMString>;
 };

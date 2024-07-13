@@ -1,4 +1,6 @@
 #![cfg(target_arch = "wasm32")]
+#![allow(renamed_and_removed_lints)] // clippy::drop_ref will be renamed to drop_ref
+#![allow(clippy::drop_ref, clippy::drop_non_drop)]
 
 extern crate js_sys;
 extern crate wasm_bindgen;
@@ -12,39 +14,55 @@ extern crate serde_derive;
 
 use wasm_bindgen::prelude::*;
 
+#[path = "3944.rs"]
+pub mod _3944;
 pub mod api;
 pub mod arg_names;
+pub mod async_vecs;
+pub mod bigint;
 pub mod char;
 pub mod classes;
 pub mod closures;
 pub mod comments;
 pub mod duplicate_deps;
 pub mod duplicates;
+pub mod enum_vecs;
 pub mod enums;
 #[path = "final.rs"]
 pub mod final_;
+pub mod futures;
+pub mod gc;
 pub mod getters_and_setters;
+pub mod ignore;
 pub mod import_class;
 pub mod imports;
+pub mod intrinsics;
+pub mod js_keywords;
 pub mod js_objects;
 pub mod jscast;
+pub mod link_to;
+pub mod macro_rules;
 pub mod math;
 pub mod no_shims;
 pub mod node;
 pub mod option;
 pub mod optional_primitives;
+pub mod result;
+pub mod result_jserror;
 pub mod rethrow;
 pub mod simple;
 pub mod slice;
+pub mod string_vecs;
+pub mod struct_vecs;
 pub mod structural;
 pub mod truthy_falsy;
-pub mod u64;
+pub mod usize;
 pub mod validate_prt;
 pub mod variadic;
 pub mod vendor_prefix;
 
 // should not be executed
 #[wasm_bindgen(start)]
-pub fn start() {
+fn start() {
     panic!();
 }

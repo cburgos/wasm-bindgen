@@ -1,16 +1,52 @@
 use crate::shell::Shell;
-use curl::easy::Easy;
-use failure::{bail, format_err, Error, ResultExt};
+use anyhow::{bail, format_err, Context, Error};
 use log::{debug, warn};
+use rouille::url::Url;
 use serde::{Deserialize, Serialize};
-use serde_json::{self, json};
+use serde_json::{self, json, Map, Value as Json};
 use std::env;
+use std::fs::File;
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use ureq::Agent;
+
+/// Options that can use to customize and configure a WebDriver session.
+type Capabilities = Map<String, Json>;
+
+/// Wrapper for [`Capabilities`] used in `--w3c` mode.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpecNewSessionParameters {
+    #[serde(rename = "alwaysMatch", default = "Capabilities::default")]
+    pub always_match: Capabilities,
+    #[serde(rename = "firstMatch", default = "first_match_default")]
+    pub first_match: Vec<Capabilities>,
+}
+
+impl Default for SpecNewSessionParameters {
+    fn default() -> Self {
+        Self {
+            always_match: Capabilities::new(),
+            first_match: vec![Capabilities::new()],
+        }
+    }
+}
+
+fn first_match_default() -> Vec<Capabilities> {
+    vec![Capabilities::default()]
+}
+
+/// Wrapper for [`Capabilities`] used in `--legacy` mode.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct LegacyNewSessionParameters {
+    #[serde(rename = "desiredCapabilities", default = "Capabilities::default")]
+    pub desired: Capabilities,
+    #[serde(rename = "requiredCapabilities", default = "Capabilities::default")]
+    pub required: Capabilities,
+}
 
 /// Execute a headless browser tests against a server running on `server`
 /// address.
@@ -19,56 +55,86 @@ use std::time::{Duration, Instant};
 /// binary, controlling it, running tests, scraping output, displaying output,
 /// etc. It will return `Ok` if all tests finish successfully, and otherwise it
 /// will return an error if some tests failed.
-pub fn run(server: &SocketAddr, shell: &Shell) -> Result<(), Error> {
-    let (driver, args, mut client_args) = Driver::find()?;
+pub fn run(server: &SocketAddr, shell: &Shell, timeout: u64) -> Result<(), Error> {
+    let driver = Driver::find()?;
+    let mut drop_log: Box<dyn FnMut()> = Box::new(|| ());
+    let driver_url = match driver.location() {
+        Locate::Remote(url) => Ok(url.clone()),
+        Locate::Local((path, args)) => {
+            // Allow tests to run in parallel (in theory) by finding any open port
+            // available for our driver. We can't bind the port for the driver, but
+            // hopefully the OS gives this invocation unique ports across processes
+            let driver_addr = TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+
+            // Spawn the driver binary, collecting its stdout/stderr in separate
+            // threads. We'll print this output later.
+            let mut cmd = Command::new(path);
+            cmd.args(args).arg(format!("--port={}", driver_addr.port()));
+            let mut child = BackgroundChild::spawn(path, &mut cmd, shell)?;
+            drop_log = Box::new(move || child.print_stdio_on_drop = false);
+
+            // Wait for the driver to come online and bind its port before we try to
+            // connect to it.
+            let start = Instant::now();
+            let max = Duration::new(5, 0);
+            let mut bound = false;
+            while start.elapsed() < max {
+                if TcpStream::connect(driver_addr).is_ok() {
+                    bound = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            if !bound {
+                bail!("driver failed to bind port during startup")
+            }
+            Url::parse(&format!("http://{}", driver_addr)).map_err(Error::from)
+        }
+    }?;
     println!(
-        "Running headless tests in {} with `{}`",
+        "Running headless tests in {} on `{}`",
         driver.browser(),
-        driver.path().display()
+        driver_url.as_str(),
     );
 
-    // Allow tests to run in parallel (in theory) by finding any open port
-    // available for our driver. We can't bind the port for the driver, but
-    // hopefully the OS gives this invocation unique ports across processes
-    let driver_addr = TcpListener::bind("127.0.0.1:0")?.local_addr()?;
-
-    // Spawn the driver binary, collecting its stdout/stderr in separate
-    // threads. We'll print this output later.
-    let mut cmd = Command::new(driver.path());
-    cmd.args(&args)
-        .arg(format!("--port={}", driver_addr.port().to_string()));
-    let mut child = BackgroundChild::spawn(driver.path(), &mut cmd, shell)?;
-
-    // Wait for the driver to come online and bind its port before we try to
-    // connect to it.
-    let start = Instant::now();
-    let max = Duration::new(5, 0);
-    let mut bound = false;
-    while start.elapsed() < max {
-        if TcpStream::connect(&driver_addr).is_ok() {
-            bound = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    if !bound {
-        bail!("driver failed to bind port during startup")
-    }
-
     let mut client = Client {
-        handle: Easy::new(),
-        driver_addr,
+        agent: Agent::new(),
+        driver_url,
         session: None,
     };
+    println!("Try find `webdriver.json` for configure browser's capabilities:");
+    let capabilities: Capabilities = match File::open("webdriver.json") {
+        Ok(file) => {
+            println!("Ok");
+            serde_json::from_reader(file)
+        }
+        Err(_) => {
+            println!("Not found");
+            Ok(Capabilities::new())
+        }
+    }?;
     shell.status("Starting new webdriver session...");
     // Allocate a new session with the webdriver protocol, and once we've done
     // so schedule the browser to get closed with a call to `close_window`.
-    let id = client.new_session(&driver, &mut client_args)?;
+    let id = client.new_session(&driver, capabilities)?;
     client.session = Some(id.clone());
 
     // Visit our local server to open up the page that runs tests, and then get
     // some handles to objects on the page which we'll be scraping output from.
-    let url = format!("http://{}", server);
+    //
+    // If WASM_BINDGEN_TEST_ADDRESS is set, use it as the local server URL,
+    // trying to inherit the port from the server if it isn't specified.
+    let url = match std::env::var("WASM_BINDGEN_TEST_ADDRESS") {
+        Ok(u) => {
+            let mut url = Url::parse(&u)?;
+            if url.port().is_none() {
+                url.set_port(Some(server.port())).unwrap();
+            }
+            url.to_string()
+        }
+        Err(_) => format!("http://{}", server),
+    };
+
     shell.status(&format!("Visiting {}...", url));
     client.goto(&id, &url)?;
     shell.status("Loading page elements...");
@@ -84,14 +150,14 @@ pub fn run(server: &SocketAddr, shell: &Shell) -> Result<(), Error> {
     // We periodically check the page to see if the output contains a known
     // string to only be printed when tests have finished running.
     //
-    // TODO: harness failures aren't well handled here, they always force a
-    //       timeout. These sorts of failures could be "you typo'd the path to a
+    // TODO: harness anyhows aren't well handled here, they always force a
+    //       timeout. These sorts of anyhows could be "you typo'd the path to a
     //       local script" which is pretty bad to time out for, we should detect
     //       this on the page and look for such output here, printing diagnostic
     //       information.
     shell.status("Waiting for test to finish...");
     let start = Instant::now();
-    let max = Duration::new(20, 0);
+    let max = Duration::new(timeout, 0);
     while start.elapsed() < max {
         if client.text(&id, &output)?.contains("test result: ") {
             break;
@@ -114,17 +180,17 @@ pub fn run(server: &SocketAddr, shell: &Shell) -> Result<(), Error> {
         // If the tests harness finished (either successfully or unsuccessfully)
         // then in theory all the info needed to debug the failure is in its own
         // output, so we shouldn't need the driver logs to get printed.
-        child.print_stdio_on_drop = false;
+        drop_log();
     } else {
-        println!("failed to detect test as having been run");
-        if output.len() > 0 {
+        println!("Failed to detect test as having been run. It might have timed out.");
+        if !output.is_empty() {
             println!("output div contained:\n{}", tab(&output));
         }
     }
-    if logs.len() > 0 {
+    if !logs.is_empty() {
         println!("console.log div contained:\n{}", tab(&logs));
     }
-    if errors.len() > 0 {
+    if !errors.is_empty() {
         println!("console.log div contained:\n{}", tab(&errors));
     }
 
@@ -136,48 +202,68 @@ pub fn run(server: &SocketAddr, shell: &Shell) -> Result<(), Error> {
 }
 
 enum Driver {
-    Gecko(PathBuf),
-    Safari(PathBuf),
-    Chrome(PathBuf),
+    Gecko(Locate),
+    Safari(Locate),
+    Chrome(Locate),
+    Edge(Locate),
+}
+
+enum Locate {
+    Local((PathBuf, Vec<String>)),
+    Remote(Url),
 }
 
 impl Driver {
-    /// Attempts to find an appropriate WebDriver server binary to execute tests
-    /// with. Performs a number of heuristics to find one available, including:
+    /// Attempts to find an appropriate remote WebDriver server or server binary
+    /// to execute tests with.
+    /// Performs a number of heuristics to find one available, including:
     ///
+    /// * Env vars like `GECKODRIVER_REMOTE` address of remote webdriver.
     /// * Env vars like `GECKODRIVER` point to the path to a binary to execute.
     /// * Otherwise, `PATH` is searched for an appropriate binary.
     ///
-    /// In both cases a lists of auxiliary arguments is also returned which is
-    /// configured through env vars like `GECKODRIVER_ARGS` and
-    /// `GECKODRIVER_CLIENT_ARGS` to support extra arguments to invocation the
-    /// driver and a browser respectively.
-    fn find() -> Result<(Driver, Vec<String>, Vec<String>), Error> {
-        let env_vars = |name: String| {
-            env::var(name)
+    /// In the last two cases a list of auxiliary arguments is also returned
+    /// which is configured through env vars like `GECKODRIVER_ARGS` to support
+    /// extra arguments to the driver's invocation.
+    fn find() -> Result<Driver, Error> {
+        let env_args = |name: &str| {
+            env::var(format!("{}_ARGS", name.to_uppercase()))
                 .unwrap_or_default()
                 .split_whitespace()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>()
         };
-        let env_args = |name: &str| env_vars(format!("{}_ARGS", name.to_uppercase()));
-        let env_client_args = |name: &str| env_vars(format!("{}_CLIENT_ARGS", name.to_uppercase()));
 
         let drivers = [
-            ("geckodriver", Driver::Gecko as fn(PathBuf) -> Driver),
-            ("safaridriver", Driver::Safari as fn(PathBuf) -> Driver),
-            ("chromedriver", Driver::Chrome as fn(PathBuf) -> Driver),
+            ("geckodriver", Driver::Gecko as fn(Locate) -> Driver),
+            ("safaridriver", Driver::Safari as fn(Locate) -> Driver),
+            ("chromedriver", Driver::Chrome as fn(Locate) -> Driver),
+            ("msedgedriver", Driver::Edge as fn(Locate) -> Driver),
         ];
 
-        // First up, if env vars like GECKODRIVER are present, use those to
-        // allow forcing usage of a particular driver.
+        // First up, if env vars like GECKODRIVER_REMOTE are present, use those
+        // to allow forcing usage of a particular remote driver.
+        for (driver, ctor) in drivers.iter() {
+            let env = format!("{}_REMOTE", driver.to_uppercase());
+            let url = match env::var(&env) {
+                Ok(var) => match Url::parse(&var) {
+                    Ok(url) => url,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+            return Ok(ctor(Locate::Remote(url)));
+        }
+
+        // Next, if env vars like GECKODRIVER are present, use those to
+        // allow forcing usage of a particular local driver.
         for (driver, ctor) in drivers.iter() {
             let env = driver.to_uppercase();
             let path = match env::var_os(&env) {
                 Some(path) => path,
                 None => continue,
             };
-            return Ok((ctor(path.into()), env_args(driver), env_client_args(driver)));
+            return Ok(ctor(Locate::Local((path.into(), env_args(driver)))));
         }
 
         // Next, check PATH. If we can find any supported driver, use that by
@@ -188,11 +274,11 @@ impl Driver {
                     .with_extension(env::consts::EXE_EXTENSION)
                     .exists()
             });
-            let (name, ctor) = match found {
+            let (driver, ctor) = match found {
                 Some(p) => p,
                 None => continue,
             };
-            return Ok((ctor(name.into()), env_args(name), env_client_args(name)));
+            return Ok(ctor(Locate::Local((driver.into(), env_args(driver)))));
         }
 
         // TODO: download an appropriate driver? How to know which one to
@@ -200,16 +286,18 @@ impl Driver {
 
         bail!(
             "\
-failed to find a suitable WebDriver binary to drive headless testing; to
-configure the location of the webdriver binary you can use environment
-variables like `GECKODRIVER=/path/to/geckodriver` or make sure that the binary
-is in `PATH`
+failed to find a suitable WebDriver binary or remote running WebDriver to drive
+headless testing; to configure the location of the webdriver binary you can use
+environment variables like `GECKODRIVER=/path/to/geckodriver` or make sure that
+the binary is in `PATH`; to configure the address of remote webdriver you can
+use environment variables like `GECKODRIVER_REMOTE=http://remote.host/`
 
-This crate currently supports `geckodriver`, `chromedriver`, and `safaridriver`,
-although more driver support may be added! You can download these at:
+This crate currently supports `geckodriver`, `chromedriver`, `safaridriver`, and
+`msedgedriver`, although more driver support may be added! You can download these at:
 
     * geckodriver - https://github.com/mozilla/geckodriver/releases
-    * chromedriver - http://chromedriver.chromium.org/downloads
+    * chromedriver - https://chromedriver.chromium.org/downloads
+    * msedgedriver - https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/
     * safaridriver - should be preinstalled on OSX
 
 If you would prefer to not use headless testing and would instead like to do
@@ -223,26 +311,28 @@ an issue against rustwasm/wasm-bindgen!
         )
     }
 
-    fn path(&self) -> &Path {
-        match self {
-            Driver::Gecko(path) => path,
-            Driver::Safari(path) => path,
-            Driver::Chrome(path) => path,
-        }
-    }
-
     fn browser(&self) -> &str {
         match self {
             Driver::Gecko(_) => "Firefox",
             Driver::Safari(_) => "Safari",
             Driver::Chrome(_) => "Chrome",
+            Driver::Edge(_) => "Edge",
+        }
+    }
+
+    fn location(&self) -> &Locate {
+        match self {
+            Driver::Gecko(locate) => locate,
+            Driver::Safari(locate) => locate,
+            Driver::Chrome(locate) => locate,
+            Driver::Edge(locate) => locate,
         }
     }
 }
 
 struct Client {
-    handle: Easy,
-    driver_addr: SocketAddr,
+    agent: Agent,
+    driver_url: Url,
     session: Option<String>,
 }
 
@@ -253,11 +343,11 @@ enum Method<'a> {
 }
 
 // Below here is a bunch of details of the WebDriver protocol implementation.
-// I'm not too too familiar with them myself, but these seem to work! I mostly
+// I'm not too familiar with them myself, but these seem to work! I mostly
 // copied the `webdriver-client` crate when writing the below bindings.
 
 impl Client {
-    fn new_session(&mut self, driver: &Driver, args: &mut Vec<String>) -> Result<String, Error> {
+    fn new_session(&mut self, driver: &Driver, mut cap: Capabilities) -> Result<String, Error> {
         match driver {
             Driver::Gecko(_) => {
                 #[derive(Deserialize)]
@@ -270,15 +360,21 @@ impl Client {
                     #[serde(rename = "sessionId")]
                     session_id: String,
                 }
-                args.push("-headless".to_string());
+                cap.entry("moz:firefoxOptions".to_string())
+                    .or_insert_with(|| Json::Object(serde_json::Map::new()))
+                    .as_object_mut()
+                    .expect("moz:firefoxOptions wasn't a JSON object")
+                    .entry("args".to_string())
+                    .or_insert_with(|| Json::Array(vec![]))
+                    .as_array_mut()
+                    .expect("args wasn't a JSON array")
+                    .extend(vec![Json::String("-headless".to_string())]);
+                let session_config = SpecNewSessionParameters {
+                    always_match: cap,
+                    first_match: vec![Capabilities::new()],
+                };
                 let request = json!({
-                    "capabilities": {
-                        "alwaysMatch": {
-                            "moz:firefoxOptions": {
-                                "args": args,
-                            }
-                        }
-                    }
+                    "capabilities": session_config,
                 });
                 let x: Response = self.post("/session", &request)?;
                 Ok(x.value.session_id)
@@ -319,19 +415,55 @@ impl Client {
                     #[serde(rename = "sessionId")]
                     session_id: String,
                 }
-                args.push("headless".to_string());
-                // See https://stackoverflow.com/questions/50642308/
-                // for what this funky `disable-dev-shm-usage`
-                // option is
-                args.push("disable-dev-shm-usage".to_string());
-                args.push("no-sandbox".to_string());
-                let request = json!({
-                    "desiredCapabilities": {
-                        "goog:chromeOptions": {
-                            "args": args,
-                        },
-                    }
-                });
+                cap.entry("goog:chromeOptions".to_string())
+                    .or_insert_with(|| Json::Object(serde_json::Map::new()))
+                    .as_object_mut()
+                    .expect("goog:chromeOptions wasn't a JSON object")
+                    .entry("args".to_string())
+                    .or_insert_with(|| Json::Array(vec![]))
+                    .as_array_mut()
+                    .expect("args wasn't a JSON array")
+                    .extend(vec![
+                        Json::String("headless".to_string()),
+                        // See https://stackoverflow.com/questions/50642308/
+                        // for what this funky `disable-dev-shm-usage`
+                        // option is
+                        Json::String("disable-dev-shm-usage".to_string()),
+                        Json::String("no-sandbox".to_string()),
+                    ]);
+                let request = LegacyNewSessionParameters {
+                    desired: cap,
+                    required: Capabilities::new(),
+                };
+                let x: Response = self.post("/session", &request)?;
+                Ok(x.session_id)
+            }
+            Driver::Edge(_) => {
+                #[derive(Deserialize)]
+                struct Response {
+                    #[serde(rename = "sessionId")]
+                    session_id: String,
+                }
+                cap.entry("ms:edgeOptions".to_string())
+                    .or_insert_with(|| Json::Object(serde_json::Map::new()))
+                    .as_object_mut()
+                    .expect("ms:edgeOptions wasn't a JSON object")
+                    .entry("args".to_string())
+                    .or_insert_with(|| Json::Array(vec![]))
+                    .as_array_mut()
+                    .expect("args wasn't a JSON array")
+                    .extend(vec![
+                        Json::String("headless".to_string()),
+                        // See https://stackoverflow.com/questions/50642308/
+                        // for what this funky `disable-dev-shm-usage`
+                        // option is
+                        Json::String("disable-dev-shm-usage".to_string()),
+                        Json::String("no-sandbox".to_string()),
+                    ]);
+                let request = LegacyNewSessionParameters {
+                    desired: cap,
+                    required: Capabilities::new(),
+                };
                 let x: Response = self.post("/session", &request)?;
                 Ok(x.session_id)
             }
@@ -341,8 +473,7 @@ impl Client {
     fn close_window(&mut self, id: &str) -> Result<(), Error> {
         #[derive(Deserialize)]
         struct Response {}
-        let x: Response = self.delete(&format!("/session/{}/window", id))?;
-        drop(x);
+        let _: Response = self.delete(&format!("/session/{}/window", id))?;
         Ok(())
     }
 
@@ -357,8 +488,7 @@ impl Client {
         let request = Request {
             url: url.to_string(),
         };
-        let x: Response = self.post(&format!("/session/{}/url", id), &request)?;
-        drop(x);
+        let _: Response = self.post(&format!("/session/{}/url", id), &request)?;
         Ok(())
     }
 
@@ -385,10 +515,10 @@ impl Client {
             value: selector.to_string(),
         };
         let x: Response = self.post(&format!("/session/{}/element", id), &request)?;
-        Ok(x.value
+        x.value
             .gecko_reference
             .or(x.value.safari_reference)
-            .ok_or(format_err!("failed to find element reference in response"))?)
+            .ok_or(format_err!("failed to find element reference in response"))
     }
 
     fn text(&mut self, id: &str, element: &str) -> Result<String, Error> {
@@ -430,36 +560,25 @@ impl Client {
     }
 
     fn doit(&mut self, path: &str, method: Method) -> Result<String, Error> {
-        let url = format!("http://{}{}", self.driver_addr, path);
-        self.handle.reset();
-        self.handle.url(&url)?;
-        match method {
-            Method::Post(data) => {
-                self.handle.post(true)?;
-                self.handle.post_fields_copy(data.as_bytes())?;
-            }
-            Method::Delete => self.handle.custom_request("DELETE")?,
-            Method::Get => self.handle.get(true)?,
-        }
-        let mut result = Vec::new();
-        {
-            let mut t = self.handle.transfer();
-            t.write_function(|buf| {
-                result.extend_from_slice(buf);
-                Ok(buf.len())
-            })?;
-            t.perform()?
-        }
-        let result = String::from_utf8_lossy(&result);
-        if self.handle.response_code()? != 200 {
-            bail!(
-                "non-200 response code: {}\n{}",
-                self.handle.response_code()?,
-                result
-            );
+        let url = self.driver_url.join(path)?;
+        let response = match method {
+            Method::Post(data) => self
+                .agent
+                .post(url.as_str())
+                .set("Content-Type", "application/json")
+                .send_bytes(data.as_bytes())?,
+            Method::Delete => self.agent.delete(url.as_str()).call()?,
+            Method::Get => self.agent.get(url.as_str()).call()?,
+        };
+
+        let response_code = response.status();
+        let result = response.into_string()?;
+
+        if response_code != 200 {
+            bail!("non-200 response code: {}\n{}", response_code, result);
         }
         debug!("got: {}", result);
-        Ok(result.into_owned())
+        Ok(result)
     }
 }
 
@@ -486,9 +605,9 @@ fn tab(s: &str) -> String {
     for line in s.lines() {
         result.push_str("    ");
         result.push_str(line);
-        result.push_str("\n");
+        result.push('\n');
     }
-    return result;
+    result
 }
 
 struct BackgroundChild<'a> {
@@ -538,11 +657,11 @@ impl<'a> Drop for BackgroundChild<'a> {
         println!("driver status: {}", status);
 
         let stdout = self.stdout.take().unwrap().join().unwrap().unwrap();
-        if stdout.len() > 0 {
+        if !stdout.is_empty() {
             println!("driver stdout:\n{}", tab(&String::from_utf8_lossy(&stdout)));
         }
         let stderr = self.stderr.take().unwrap().join().unwrap().unwrap();
-        if stderr.len() > 0 {
+        if !stderr.is_empty() {
             println!("driver stderr:\n{}", tab(&String::from_utf8_lossy(&stderr)));
         }
     }

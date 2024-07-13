@@ -5,6 +5,8 @@
 
 use wasm_bindgen::prelude::*;
 
+use super::TestResult;
+
 /// Implementation of the `Formatter` trait for node.js
 pub struct Node {}
 
@@ -18,13 +20,9 @@ extern "C" {
 }
 
 impl Node {
-    /// Attempts to create a new formatter for node.js, returning `None` if this
-    /// is executing in a browser and Node won't work.
-    pub fn new() -> Option<Node> {
-        if super::detect::is_browser() {
-            return None;
-        }
-        Some(Node {})
+    /// Attempts to create a new formatter for node.js
+    pub fn new() -> Node {
+        Node {}
     }
 }
 
@@ -33,9 +31,8 @@ impl super::Formatter for Node {
         super::js_console_log(line);
     }
 
-    fn log_test(&self, name: &str, result: &Result<(), JsValue>) {
-        let s = if result.is_ok() { "ok" } else { "FAIL" };
-        self.writeln(&format!("test {} ... {}", name, s));
+    fn log_test(&self, name: &str, result: &TestResult) {
+        self.writeln(&format!("test {} ... {}", name, result));
     }
 
     fn stringify_error(&self, err: &JsValue) -> String {

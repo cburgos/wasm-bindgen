@@ -11,9 +11,7 @@ function in Rust.
 
 ## `Cargo.toml`
 
-The `Cargo.toml` enables depends on the `wasm-bindgen` crate. Here we're using
-a `path` dependency because this example lives in the `wasm-bindgen` repository
-itself, but you'd use the commented out version beneath it instead.
+The `Cargo.toml` lists the `wasm-bindgen` crate as a dependency.
 
 Also of note is the `crate-type = ["cdylib"]` which is largely used for wasm
 final artifacts today.
@@ -40,7 +38,7 @@ Our JS entry point is quite small!
 
 ## Webpack-specific files
 
-> **Note**: Webpack is not required for this example, and if you're interested
+> **Note**: Webpack is required for this example, and if you're interested
 > in options that don't use a JS bundler [see other examples][wab].
 
 [wab]: without-a-bundler.html

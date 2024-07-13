@@ -18,8 +18,8 @@ interface URI;
 interface nsIStreamListener;
 */
 
-[HTMLConstructor,
- NamedConstructor=Image(optional unsigned long width, optional unsigned long height)]
+[NamedConstructor=Image(optional unsigned long width, optional unsigned long height),
+ Exposed=Window]
 interface HTMLImageElement : HTMLElement {
            [CEReactions, SetterThrows]
            attribute DOMString alt;
@@ -39,9 +39,13 @@ interface HTMLImageElement : HTMLElement {
            attribute unsigned long width;
            [CEReactions, SetterThrows]
            attribute unsigned long height;
+           [CEReactions, SetterThrows]
+           attribute DOMString decoding;
   readonly attribute unsigned long naturalWidth;
   readonly attribute unsigned long naturalHeight;
   readonly attribute boolean complete;
+           [NewObject]
+           Promise<undefined> decode();
 };
 
 // http://www.whatwg.org/specs/web-apps/current-work/#other-elements,-attributes-and-apis
@@ -57,7 +61,7 @@ partial interface HTMLImageElement {
            [CEReactions, SetterThrows]
            attribute DOMString longDesc;
 
-  [CEReactions, TreatNullAs=EmptyString,SetterThrows] attribute DOMString border;
+  [CEReactions, SetterThrows] attribute [TreatNullAs=EmptyString] DOMString border;
 };
 
 // [Update me: not in whatwg spec yet]

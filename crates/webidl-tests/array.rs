@@ -1,7 +1,6 @@
+use crate::generated::*;
 use wasm_bindgen::Clamped;
 use wasm_bindgen_test::*;
-
-include!(concat!(env!("OUT_DIR"), "/array.rs"));
 
 #[wasm_bindgen_test]
 fn take_and_return_a_bunch_of_slices() {
@@ -18,4 +17,18 @@ fn take_and_return_a_bunch_of_slices() {
     assert_eq!(f.u16(&mut [1, 2]), [3, 4, 5]);
     assert_eq!(f.u32(&mut [1, 2]), [3, 4, 5]);
     assert_eq!(f.u8_clamped(Clamped(&mut [1, 2])).0, [3, 4, 5]);
+    assert_eq!(
+        f.octet_array()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        [3., 4., 5.]
+    );
+    assert_eq!(
+        f.octet_sequence()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        [3., 4., 5.]
+    );
 }

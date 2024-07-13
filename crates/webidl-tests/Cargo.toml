@@ -3,19 +3,23 @@ name = "webidl-tests"
 version = "0.1.0"
 authors = ["The wasm-bindgen Developers"]
 edition = "2018"
+publish = false
+rust-version = "1.57"
 
 [lib]
 test = false
 doctest = false
 path = 'lib.rs'
 
+[dependencies]
+js-sys = { path = '../js-sys' }
+wasm-bindgen-futures = { path = '../futures' }
+wasm-bindgen = { path = '../..' }
+
 [build-dependencies]
-wasm-bindgen-webidl = { path = '../webidl' }
-env_logger = "0.6"
+wasm-bindgen-webidl = { path = "../webidl" }
 
 [dev-dependencies]
-js-sys = { path = '../js-sys' }
-wasm-bindgen = { path = '../..' }
 wasm-bindgen-test = { path = '../test' }
 
 [[test]]

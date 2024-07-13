@@ -1,31 +1,21 @@
-use std::fs;
-use std::process::Command;
-
+use walrus::ModuleConfig;
 use wasm_bindgen_wasm_interpreter::Interpreter;
 
 fn interpret(wat: &str, name: &str, result: Option<&[u32]>) {
-    let input = tempfile::NamedTempFile::new().unwrap();
-    let output = tempfile::NamedTempFile::new().unwrap();
-    fs::write(input.path(), wat).unwrap();
-    let status = Command::new("wat2wasm")
-        .arg(input.path())
-        .arg("-o")
-        .arg(output.path())
-        .status()
+    let wasm = wat::parse_str(wat).unwrap();
+    let mut module = ModuleConfig::new()
+        .generate_producers_section(false)
+        .parse(&wasm)
         .unwrap();
-    println!("status: {}", status);
-    assert!(status.success());
-    let module = walrus::Module::from_file(output.path()).unwrap();
     let mut i = Interpreter::new(&module).unwrap();
     let id = module
         .exports
         .iter()
         .filter(|e| e.name == name)
-        .filter_map(|e| match e.item {
+        .find_map(|e| match e.item {
             walrus::ExportItem::Function(f) => Some(f),
             _ => None,
         })
-        .next()
         .unwrap();
     assert_eq!(i.interpret_descriptor(id, &module), result);
 }
@@ -100,7 +90,8 @@ fn globals() {
             (export "foo" (func $foo))
         )
     "#;
-    interpret(wat, "foo", Some(&[256]));
+    // __wbindgen_describe is called with a global - in Frame.eval we assume all access to globals is the stack pointer
+    interpret(wat, "foo", Some(&[32768]));
 }
 
 #[test]

@@ -11,6 +11,7 @@
  JSImplementation="@mozilla.org/dom/rtpreceiver;1"]
 interface RTCRtpReceiver {
   readonly attribute MediaStreamTrack   track;
+  static RTCRtpCapabilities?            getCapabilities(DOMString kind);
   Promise<RTCStatsReport>               getStats();
   [Pref="media.peerconnection.rtpsourcesapi.enabled"]
   sequence<RTCRtpContributingSource>    getContributingSources();
@@ -18,11 +19,11 @@ interface RTCRtpReceiver {
   sequence<RTCRtpSynchronizationSource> getSynchronizationSources();
 
   [ChromeOnly]
-  void setStreamIds(sequence<DOMString> streamIds);
+  undefined setStreamIds(sequence<DOMString> streamIds);
   [ChromeOnly]
-  void setRemoteSendBit(boolean sendBit);
+  undefined setRemoteSendBit(boolean sendBit);
   [ChromeOnly]
-  void processTrackAdditionsAndRemovals(
+  undefined processTrackAdditionsAndRemovals(
       RTCRtpTransceiver transceiver,
       object postProcessing);
 };

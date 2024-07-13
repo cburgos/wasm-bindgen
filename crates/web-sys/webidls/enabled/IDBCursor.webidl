@@ -14,10 +14,11 @@ enum IDBCursorDirection {
     "prevunique"
 };
 
-[Exposed=(Window,Worker,System)]
+[Exposed=(Window,Worker)]
 interface IDBCursor {
     readonly    attribute (IDBObjectStore or IDBIndex) source;
 
+    [BinaryName="getDirection"]
     readonly    attribute IDBCursorDirection           direction;
 
     [Throws]
@@ -26,23 +27,25 @@ interface IDBCursor {
     [Throws]
     readonly    attribute any                          primaryKey;
 
+    readonly    attribute IDBRequest                   request;
+
     [Throws]
     IDBRequest update (any value);
 
     [Throws]
-    void       advance ([EnforceRange] unsigned long count);
+    undefined       advance ([EnforceRange] unsigned long count);
 
     [Throws]
-    void       continue (optional any key);
+    undefined       continue (optional any key);
 
     [Throws]
-    void       continuePrimaryKey(any key, any primaryKey);
+    undefined       continuePrimaryKey(any key, any primaryKey);
 
     [Throws]
     IDBRequest delete ();
 };
 
-[Exposed=(Window,Worker,System)]
+[Exposed=(Window,Worker)]
 interface IDBCursorWithValue : IDBCursor {
     [Throws]
     readonly    attribute any value;

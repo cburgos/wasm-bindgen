@@ -1,8 +1,12 @@
 #![doc(html_root_url = "https://docs.rs/wasm-bindgen-shared/0.2")]
 
-// The schema is so unstable right now we just force it to change whenever this
-// package's version changes, which happens on all publishes.
-pub const SCHEMA_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(test)]
+mod schema_hash_approval;
+
+// This gets changed whenever our schema changes.
+// At this time versions of wasm-bindgen and wasm-bindgen-cli are required to have the exact same
+// SCHEMA_VERSION in order to work together.
+pub const SCHEMA_VERSION: &str = "0.2.93";
 
 #[macro_export]
 macro_rules! shared_api {
@@ -13,21 +17,30 @@ macro_rules! shared_api {
             enums: Vec<Enum<'a>>,
             imports: Vec<Import<'a>>,
             structs: Vec<Struct<'a>>,
-            typescript_custom_sections: Vec<&'a str>,
+            // NOTE: Originally typescript_custom_sections are just some strings
+            // But the expression type can only be parsed into a string during compilation
+            // So when encoding, LitOrExpr contains two types, one is that expressions are parsed into strings during compilation, and the other is can be parsed directly.
+            // When decoding, LitOrExpr can be decoded as a string.
+            typescript_custom_sections: Vec<LitOrExpr<'a>>,
             local_modules: Vec<LocalModule<'a>>,
             inline_js: Vec<&'a str>,
             unique_crate_identifier: &'a str,
             package_json: Option<&'a str>,
+            linked_modules: Vec<LinkedModule<'a>>,
         }
 
         struct Import<'a> {
-            module: ImportModule<'a>,
-            js_namespace: Option<&'a str>,
+            module: Option<ImportModule<'a>>,
+            js_namespace: Option<Vec<String>>,
             kind: ImportKind<'a>,
         }
 
+        struct LinkedModule<'a> {
+            module: ImportModule<'a>,
+            link_function_name: &'a str,
+        }
+
         enum ImportModule<'a> {
-            None,
             Named(&'a str),
             RawNamed(&'a str),
             Inline(u32),
@@ -37,7 +50,7 @@ macro_rules! shared_api {
             Function(ImportFunction<'a>),
             Static(ImportStatic<'a>),
             Type(ImportType<'a>),
-            Enum(ImportEnum),
+            Enum(StringEnum),
         }
 
         struct ImportFunction<'a> {
@@ -85,7 +98,7 @@ macro_rules! shared_api {
             vendor_prefixes: Vec<&'a str>,
         }
 
-        struct ImportEnum {}
+        struct StringEnum {}
 
         struct Export<'a> {
             class: Option<&'a str>,
@@ -100,28 +113,38 @@ macro_rules! shared_api {
             name: &'a str,
             variants: Vec<EnumVariant<'a>>,
             comments: Vec<&'a str>,
+            generate_typescript: bool,
         }
 
         struct EnumVariant<'a> {
             name: &'a str,
             value: u32,
+            comments: Vec<&'a str>,
         }
 
         struct Function<'a> {
             arg_names: Vec<String>,
+            asyncness: bool,
             name: &'a str,
+            generate_typescript: bool,
+            generate_jsdoc: bool,
+            variadic: bool,
         }
 
         struct Struct<'a> {
             name: &'a str,
             fields: Vec<StructField<'a>>,
             comments: Vec<&'a str>,
+            is_inspectable: bool,
+            generate_typescript: bool,
         }
 
         struct StructField<'a> {
             name: &'a str,
             readonly: bool,
             comments: Vec<&'a str>,
+            generate_typescript: bool,
+            generate_jsdoc: bool,
         }
 
         struct LocalModule<'a> {
@@ -133,17 +156,24 @@ macro_rules! shared_api {
 } // end of mac definition
 
 pub fn new_function(struct_name: &str) -> String {
-    let mut name = format!("__wbg_");
+    let mut name = "__wbg_".to_string();
     name.extend(struct_name.chars().flat_map(|s| s.to_lowercase()));
     name.push_str("_new");
-    return name;
+    name
 }
 
 pub fn free_function(struct_name: &str) -> String {
-    let mut name = format!("__wbg_");
+    let mut name = "__wbg_".to_string();
     name.extend(struct_name.chars().flat_map(|s| s.to_lowercase()));
     name.push_str("_free");
-    return name;
+    name
+}
+
+pub fn unwrap_function(struct_name: &str) -> String {
+    let mut name = "__wbg_".to_string();
+    name.extend(struct_name.chars().flat_map(|s| s.to_lowercase()));
+    name.push_str("_unwrap");
+    name
 }
 
 pub fn free_function_export_name(function_name: &str) -> String {
@@ -155,25 +185,25 @@ pub fn struct_function_export_name(struct_: &str, f: &str) -> String {
         .chars()
         .flat_map(|s| s.to_lowercase())
         .collect::<String>();
-    name.push_str("_");
+    name.push('_');
     name.push_str(f);
-    return name;
+    name
 }
 
 pub fn struct_field_get(struct_: &str, f: &str) -> String {
     let mut name = String::from("__wbg_get_");
     name.extend(struct_.chars().flat_map(|s| s.to_lowercase()));
-    name.push_str("_");
+    name.push('_');
     name.push_str(f);
-    return name;
+    name
 }
 
 pub fn struct_field_set(struct_: &str, f: &str) -> String {
     let mut name = String::from("__wbg_set_");
     name.extend(struct_.chars().flat_map(|s| s.to_lowercase()));
-    name.push_str("_");
+    name.push('_');
     name.push_str(f);
-    return name;
+    name
 }
 
 pub fn version() -> String {
@@ -181,7 +211,7 @@ pub fn version() -> String {
     if let Some(s) = option_env!("WBG_VERSION") {
         v.push_str(" (");
         v.push_str(s);
-        v.push_str(")");
+        v.push(')');
     }
-    return v;
+    v
 }

@@ -66,23 +66,40 @@ dictionary RTCRtpParameters {
   sequence<RTCRtpCodecParameters>           codecs;
 };
 
+dictionary RTCRtpCodecCapability {
+  required DOMString     mimeType;
+  required unsigned long clockRate;
+  unsigned short         channels;
+  DOMString              sdpFmtpLine;
+};
+
+dictionary RTCRtpHeaderExtensionCapability {
+  required DOMString uri;
+};
+
+dictionary RTCRtpCapabilities {
+  required sequence<RTCRtpCodecCapability>           codecs;
+  required sequence<RTCRtpHeaderExtensionCapability> headerExtensions;
+};
+
 [Pref="media.peerconnection.enabled",
  JSImplementation="@mozilla.org/dom/rtpsender;1"]
 interface RTCRtpSender {
   readonly attribute MediaStreamTrack? track;
-  Promise<void> setParameters (optional RTCRtpParameters parameters);
+  Promise<undefined> setParameters (optional RTCRtpParameters parameters);
   RTCRtpParameters getParameters();
-  Promise<void> replaceTrack(MediaStreamTrack? withTrack);
+  Promise<undefined> replaceTrack(MediaStreamTrack? withTrack);
   Promise<RTCStatsReport> getStats();
+  static RTCRtpCapabilities? getCapabilities(DOMString kind);
   [Pref="media.peerconnection.dtmf.enabled"]
   readonly attribute RTCDTMFSender? dtmf;
-  // Ugh, can't use a ChromeOnly attibute sequence<MediaStream>...
+  // Ugh, can't use a ChromeOnly attribute sequence<MediaStream>...
   [ChromeOnly]
   sequence<MediaStream> getStreams();
   [ChromeOnly]
-  void setStreams(sequence<MediaStream> streams);
+  undefined setStreams(sequence<MediaStream> streams);
   [ChromeOnly]
-  void setTrack(MediaStreamTrack? track);
+  undefined setTrack(MediaStreamTrack? track);
   [ChromeOnly]
-  void checkWasCreatedByPc(RTCPeerConnection pc);
+  undefined checkWasCreatedByPc(RTCPeerConnection pc);
 };

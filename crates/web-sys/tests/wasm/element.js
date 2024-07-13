@@ -116,6 +116,7 @@ export function new_select_with_food_opts() {
 
   for(let i = 0; i < opts.length; i++) {
       let opt = document.createElement("option");
+      opt.id = opts[i];
       opt.value = opts[i];
       opt.text = opts[i];
       select.appendChild(opt);
@@ -149,16 +150,6 @@ export function new_thead() {
 
 export function new_title() {
   return document.createElement("title");
-}
-
-export function new_webgl_rendering_context() {
-  const canvas = document.createElement('canvas');
-  return canvas.getContext('webgl');
-}
-
-export function new_webgl2_rendering_context() {
-  const canvas = document.createElement('canvas');
-  return canvas.getContext('webgl2');
 }
 
 export function new_xpath_result() {

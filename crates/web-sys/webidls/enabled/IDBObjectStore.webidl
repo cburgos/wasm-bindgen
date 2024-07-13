@@ -12,7 +12,7 @@ dictionary IDBObjectStoreParameters {
     boolean                             autoIncrement = false;
 };
 
-[Exposed=(Window,Worker,System)]
+[Exposed=(Window,Worker)]
 interface IDBObjectStore {
     [SetterThrows]
     attribute DOMString name;
@@ -46,13 +46,13 @@ interface IDBObjectStore {
     IDBRequest openCursor (optional any range, optional IDBCursorDirection direction = "next");
 
     [Throws]
-    IDBIndex   createIndex (DOMString name, (DOMString or sequence<DOMString>) keyPath, optional IDBIndexParameters optionalParameters);
+    IDBIndex   createIndex (DOMString name, (DOMString or sequence<DOMString>) keyPath, optional IDBIndexParameters optionalParameters = {});
 
     [Throws]
     IDBIndex   index (DOMString name);
 
     [Throws]
-    void       deleteIndex (DOMString indexName);
+    undefined       deleteIndex (DOMString indexName);
 
     [Throws]
     IDBRequest count (optional any key);
@@ -60,10 +60,10 @@ interface IDBObjectStore {
 
 partial interface IDBObjectStore {
     [Throws]
-    IDBRequest getAll (optional any key, [EnforceRange] optional unsigned long limit);
+    IDBRequest getAll (optional any key, optional [EnforceRange] unsigned long limit);
 
     [Throws]
-    IDBRequest getAllKeys (optional any key, [EnforceRange] optional unsigned long limit);
+    IDBRequest getAllKeys (optional any key, optional [EnforceRange] unsigned long limit);
 
     [Throws]
     IDBRequest openKeyCursor (optional any range, optional IDBCursorDirection direction = "next");

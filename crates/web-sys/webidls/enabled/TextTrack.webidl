@@ -34,9 +34,13 @@ interface TextTrack : EventTarget {
   readonly attribute TextTrackCueList? cues;
   readonly attribute TextTrackCueList? activeCues;
 
-  void addCue(VTTCue cue);
+  undefined addCue(VTTCue cue);
   [Throws]
-  void removeCue(VTTCue cue);
+  undefined removeCue(VTTCue cue);
 
            attribute EventHandler oncuechange;
+};
+
+partial interface TextTrack {
+    readonly attribute SourceBuffer? sourceBuffer;
 };

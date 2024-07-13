@@ -18,6 +18,10 @@ interface HTMLElement : Element {
   [CEReactions]
            attribute DOMString title;
   [CEReactions]
+           attribute long scrollHeight;
+  [CEReactions]
+           attribute long scrollTop;
+  [CEReactions]
            attribute DOMString lang;
   //         attribute boolean translate;
   [CEReactions, SetterThrows, Pure]
@@ -31,14 +35,16 @@ interface HTMLElement : Element {
   // user interaction
   [CEReactions, SetterThrows, Pure]
            attribute boolean hidden;
+  [CEReactions]
+           attribute boolean inert;
   [NeedsCallerType]
-  void click();
+  undefined click();
   [CEReactions, SetterThrows, Pure]
            attribute long tabIndex;
   [Throws]
-  void focus();
+  undefined focus(optional FocusOptions options = {});
   [Throws]
-  void blur();
+  undefined blur();
   [CEReactions, SetterThrows, Pure]
            attribute DOMString accessKey;
   [Pure]

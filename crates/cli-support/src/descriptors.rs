@@ -3,7 +3,7 @@
 //! The purpose of this module is to basically execute a pass on a raw wasm
 //! module that just came out of the compiler. The pass will execute all
 //! relevant descriptor functions contained in the module which wasm-bindgen
-//! uses to convey type infomation here, to the CLI.
+//! uses to convey type information here, to the CLI.
 //!
 //! All descriptor functions are removed after this pass runs and in their stead
 //! a new custom section, defined in this module, is inserted into the
@@ -11,7 +11,7 @@
 //! functions.
 
 use crate::descriptor::{Closure, Descriptor};
-use failure::Error;
+use anyhow::Error;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use walrus::ImportId;
@@ -36,27 +36,6 @@ pub fn execute(module: &mut Module) -> Result<WasmBindgenDescriptorsSectionId, E
 
     section.execute_exports(module, &mut interpreter)?;
     section.execute_closures(module, &mut interpreter)?;
-
-    // Delete all descriptor functions and imports from the module now that
-    // we've executed all of them.
-    //
-    // Note though that during this GC pass it's a bit aggressive in that it can
-    // delete the function table entirely. We don't actually know at this point
-    // whether we need the function table or not. The bindings generation may
-    // need to export the table so the JS glue can call functions in it, and
-    // that's only discovered during binding selection. For now we just add
-    // synthetic root exports for all tables in the module, and then we delete
-    // the exports just after GC. This should keep tables like the function
-    // table alive during GC all the way through to the bindings generation
-    // where we can either actually export it or gc it out since it's not used.
-    let mut exported_tables = Vec::new();
-    for table in module.tables.iter() {
-        exported_tables.push(module.exports.add("foo", table.id()));
-    }
-    walrus::passes::gc::run(module);
-    for export in exported_tables {
-        module.exports.delete(export);
-    }
 
     Ok(module.customs.add(section))
 }
@@ -127,30 +106,25 @@ impl WasmBindgenDescriptorsSection {
         // For all indirect functions that were closure descriptors, delete them
         // from the function table since we've executed them and they're not
         // necessary in the final binary.
-        let table_id = match interpreter.function_table_id() {
-            Some(id) => id,
-            None => return Ok(()),
-        };
-        let table = module.tables.get_mut(table_id);
-        let table = match &mut table.kind {
-            walrus::TableKind::Function(f) => f,
-            _ => unreachable!(),
-        };
-        for idx in element_removal_list {
+        for (segment, idx) in element_removal_list {
             log::trace!("delete element {}", idx);
-            assert!(table.elements[idx].is_some());
-            table.elements[idx] = None;
+            module.elements.get_mut(segment).members[idx] = None;
         }
 
         // And finally replace all calls of `wbindgen_describe_closure` with a
         // freshly manufactured import. Save off the type of this import in
         // ourselves, and then we're good to go.
         let ty = module.funcs.get(wbindgen_describe_closure).ty();
-        for (func, descriptor) in func_to_descriptor {
+        // sort to ensure ids and caches are consistent across runs
+        let mut items = func_to_descriptor.into_iter().collect::<Vec<_>>();
+        items.sort_by_key(|i| i.0);
+        for (func, descriptor) in items {
             let import_name = format!("__wbindgen_closure_wrapper{}", func.index());
             let (id, import_id) =
                 module.add_import_func("__wbindgen_placeholder__", &import_name, ty);
             module.funcs.get_mut(id).name = Some(import_name);
+            self.closure_imports
+                .insert(import_id, descriptor.clone().unwrap_closure());
 
             let local = match &mut module.funcs.get_mut(func).kind {
                 walrus::FunctionKind::Local(l) => l,
@@ -165,8 +139,6 @@ impl WasmBindgenDescriptorsSection {
                 local,
                 entry,
             );
-            self.closure_imports
-                .insert(import_id, descriptor.unwrap_closure());
         }
         return Ok(());
 
@@ -188,7 +160,7 @@ impl WasmBindgenDescriptorsSection {
             replacement: FunctionId,
         }
 
-        impl<'a> VisitorMut for UpdateDescribeClosure {
+        impl VisitorMut for UpdateDescribeClosure {
             fn visit_call_mut(&mut self, call: &mut Call) {
                 if call.func == self.wbindgen_describe_closure {
                     call.func = self.replacement;

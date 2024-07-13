@@ -1,7 +1,7 @@
 #![doc(html_root_url = "https://docs.rs/wasm-bindgen-cli-support/0.2")]
 
-use failure::{bail, Error, ResultExt};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use anyhow::{bail, Context, Error};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::mem;
@@ -9,14 +9,17 @@ use std::path::{Path, PathBuf};
 use std::str;
 use walrus::Module;
 
-mod anyref;
+pub(crate) const PLACEHOLDER_MODULE: &str = "__wbindgen_placeholder__";
+
 mod decode;
 mod descriptor;
 mod descriptors;
+mod externref;
 mod intrinsic;
 mod js;
+mod multivalue;
 pub mod wasm2es6js;
-mod webidl;
+mod wit;
 
 pub struct Bindgen {
     input: Input,
@@ -24,33 +27,38 @@ pub struct Bindgen {
     mode: OutputMode,
     debug: bool,
     typescript: bool,
+    omit_imports: bool,
     demangle: bool,
+    keep_lld_exports: bool,
     keep_debug: bool,
     remove_name_section: bool,
     remove_producers_section: bool,
+    omit_default_module_path: bool,
     emit_start: bool,
-    // Experimental support for weakrefs, an upcoming ECMAScript feature.
-    // Currently only enable-able through an env var.
-    weak_refs: bool,
     // Support for the wasm threads proposal, transforms the wasm module to be
     // "ready to be instantiated on any thread"
     threads: wasm_bindgen_threads_xform::Config,
-    anyref: bool,
-    wasm_interface_types: bool,
+    externref: bool,
+    multi_value: bool,
     encode_into: EncodeInto,
+    split_linked_modules: bool,
 }
 
 pub struct Output {
     module: walrus::Module,
     stem: String,
+    generated: Generated,
+}
+
+struct Generated {
+    mode: OutputMode,
     js: String,
     ts: String,
-    mode: OutputMode,
-    typescript: bool,
+    start: Option<String>,
     snippets: HashMap<String, Vec<String>>,
     local_modules: HashMap<String, String>,
     npm_dependencies: HashMap<String, (PathBuf, String)>,
-    wasm_interface_types: bool,
+    typescript: bool,
 }
 
 #[derive(Clone)]
@@ -59,11 +67,13 @@ enum OutputMode {
     Web,
     NoModules { global: String },
     Node { experimental_modules: bool },
+    Deno,
 }
 
 enum Input {
     Path(PathBuf),
     Module(Module, String),
+    Bytes(Vec<u8>, String),
     None,
 }
 
@@ -75,8 +85,9 @@ pub enum EncodeInto {
 
 impl Bindgen {
     pub fn new() -> Bindgen {
-        let anyref = env::var("WASM_BINDGEN_ANYREF").is_ok();
-        let wasm_interface_types = env::var("WASM_INTERFACE_TYPES").is_ok();
+        let externref =
+            env::var("WASM_BINDGEN_ANYREF").is_ok() || env::var("WASM_BINDGEN_EXTERNREF").is_ok();
+        let multi_value = env::var("WASM_BINDGEN_MULTI_VALUE").is_ok();
         Bindgen {
             input: Input::None,
             out_name: None,
@@ -85,16 +96,19 @@ impl Bindgen {
             },
             debug: false,
             typescript: false,
+            omit_imports: false,
             demangle: true,
+            keep_lld_exports: false,
             keep_debug: false,
             remove_name_section: false,
             remove_producers_section: false,
             emit_start: true,
-            weak_refs: env::var("WASM_BINDGEN_WEAKREF").is_ok(),
             threads: threads_config(),
-            anyref: anyref || wasm_interface_types,
-            wasm_interface_types,
+            externref,
+            multi_value,
             encode_into: EncodeInto::Test,
+            omit_default_module_path: true,
+            split_linked_modules: false,
         }
     }
 
@@ -108,11 +122,23 @@ impl Bindgen {
         self
     }
 
+    pub fn reference_types(&mut self, enable: bool) -> &mut Bindgen {
+        self.externref = enable;
+        self
+    }
+
     /// Explicitly specify the already parsed input module.
     pub fn input_module(&mut self, name: &str, module: Module) -> &mut Bindgen {
         let name = name.to_string();
         self.input = Input::Module(module, name);
-        return self;
+        self
+    }
+
+    /// Specify the input as the provided Wasm bytes.
+    pub fn input_bytes(&mut self, name: &str, bytes: Vec<u8>) -> &mut Bindgen {
+        let name = name.to_string();
+        self.input = Input::Bytes(bytes, name);
+        self
     }
 
     fn switch_mode(&mut self, mode: OutputMode, flag: &str) -> Result<(), Error> {
@@ -191,6 +217,14 @@ impl Bindgen {
         Ok(self)
     }
 
+    pub fn deno(&mut self, deno: bool) -> Result<&mut Bindgen, Error> {
+        if deno {
+            self.switch_mode(OutputMode::Deno, "--target deno")?;
+            self.encode_into(EncodeInto::Always);
+        }
+        Ok(self)
+    }
+
     pub fn no_modules_global(&mut self, name: &str) -> Result<&mut Bindgen, Error> {
         match &mut self.mode {
             OutputMode::NoModules { global } => *global = name.to_string(),
@@ -209,8 +243,18 @@ impl Bindgen {
         self
     }
 
+    pub fn omit_imports(&mut self, omit_imports: bool) -> &mut Bindgen {
+        self.omit_imports = omit_imports;
+        self
+    }
+
     pub fn demangle(&mut self, demangle: bool) -> &mut Bindgen {
         self.demangle = demangle;
+        self
+    }
+
+    pub fn keep_lld_exports(&mut self, keep_lld_exports: bool) -> &mut Bindgen {
+        self.keep_lld_exports = keep_lld_exports;
         self
     }
 
@@ -239,74 +283,86 @@ impl Bindgen {
         self
     }
 
+    pub fn omit_default_module_path(&mut self, omit_default_module_path: bool) -> &mut Bindgen {
+        self.omit_default_module_path = omit_default_module_path;
+        self
+    }
+
+    pub fn split_linked_modules(&mut self, split_linked_modules: bool) -> &mut Bindgen {
+        self.split_linked_modules = split_linked_modules;
+        self
+    }
+
     pub fn generate<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Error> {
         self.generate_output()?.emit(path.as_ref())
     }
 
-    pub fn generate_output(&mut self) -> Result<Output, Error> {
-        let (mut module, stem) = match self.input {
+    pub fn stem(&self) -> Result<&str, Error> {
+        Ok(match &self.input {
             Input::None => bail!("must have an input by now"),
-            Input::Module(ref mut m, ref name) => {
+            Input::Module(_, name) | Input::Bytes(_, name) => name,
+            Input::Path(path) => match &self.out_name {
+                Some(name) => name,
+                None => path.file_stem().unwrap().to_str().unwrap(),
+            },
+        })
+    }
+
+    pub fn generate_output(&mut self) -> Result<Output, Error> {
+        let mut module = match self.input {
+            Input::None => bail!("must have an input by now"),
+            Input::Module(ref mut m, _) => {
                 let blank_module = Module::default();
-                (mem::replace(m, blank_module), &name[..])
+                mem::replace(m, blank_module)
             }
             Input::Path(ref path) => {
-                let contents = fs::read(&path)
-                    .with_context(|_| format!("failed to read `{}`", path.display()))?;
-                let module = walrus::ModuleConfig::new()
-                    // Skip validation of the module as LLVM's output is
-                    // generally already well-formed and so we won't gain much
-                    // from re-validating. Additionally LLVM's current output
-                    // for threads includes atomic instructions but doesn't
-                    // include shared memory, so it fails that part of
-                    // validation!
-                    .strict_validate(false)
-                    .generate_dwarf(self.keep_debug)
-                    .generate_name_section(!self.remove_name_section)
-                    .generate_producers_section(!self.remove_producers_section)
-                    .on_parse(wasm_webidl_bindings::binary::on_parse)
-                    .parse(&contents)
-                    .context("failed to parse input file as wasm")?;
-                let stem = match &self.out_name {
-                    Some(name) => &name,
-                    None => path.file_stem().unwrap().to_str().unwrap(),
-                };
-                (module, stem)
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("failed reading '{}'", path.display()))?;
+                self.module_from_bytes(&bytes).with_context(|| {
+                    format!("failed getting Wasm module for '{}'", path.display())
+                })?
             }
+            Input::Bytes(ref bytes, _) => self
+                .module_from_bytes(bytes)
+                .context("failed getting Wasm module")?,
         };
 
-        // This isn't the hardest thing in the world too support but we
-        // basically don't know how to rationalize #[wasm_bindgen(start)] and
-        // the actual `start` function if present. Figure this out later if it
-        // comes up, but otherwise we should continue to be compatible with
-        // LLVM's output today.
-        //
-        // Note that start function handling in `js/mod.rs` will need to be
-        // updated as well, because `#[wasm_bindgen(start)]` is inserted *after*
-        // a module's start function, if any, because we assume start functions
-        // only show up when injected on behalf of wasm-bindgen's passes.
-        if module.start.is_some() {
-            bail!(
-                "wasm-bindgen is currently incompatible with modules that \
-                 already have a start function"
-            );
+        // Check that no exported symbol is called "default" if we target web.
+        if matches!(self.mode, OutputMode::Web)
+            && module.exports.iter().any(|export| export.name == "default")
+        {
+            bail!("exported symbol \"default\" not allowed for --target web")
         }
 
-        self.threads
+        let thread_count = self
+            .threads
             .run(&mut module)
-            .with_context(|_| "failed to prepare module for threading")?;
+            .with_context(|| "failed to prepare module for threading")?;
 
         // If requested, turn all mangled symbols into prettier unmangled
         // symbols with the help of `rustc-demangle`.
         if self.demangle {
             demangle(&mut module);
         }
-        unexported_unused_lld_things(&mut module);
+        if !self.keep_lld_exports {
+            unexported_unused_lld_things(&mut module);
+        }
 
         // We're making quite a few changes, list ourselves as a producer.
         module
             .producers
             .add_processed_by("wasm-bindgen", &wasm_bindgen_shared::version());
+
+        // Parse and remove our custom section before executing descriptors.
+        // That includes checking that the binary has the same schema version
+        // as this version of the CLI, which is why we do it first - to make
+        // sure that this binary was produced by a compatible version of the
+        // wasm-bindgen macro before attempting to interpret our unstable
+        // descriptor format. That way, we give a more helpful version mismatch
+        // error instead of an unhelpful panic if an incompatible descriptor is
+        // found.
+        let mut storage = Vec::new();
+        let programs = wit::extract_programs(&mut module, &mut storage)?;
 
         // Learn about the type signatures of all wasm-bindgen imports and
         // exports by executing `__wbindgen_describe_*` functions. This'll
@@ -314,58 +370,105 @@ impl Bindgen {
         // sections.
         descriptors::execute(&mut module)?;
 
-        // Process and remove our raw custom sections emitted by the
-        // #[wasm_bindgen] macro and the compiler. In their stead insert a
-        // forward-compatible WebIDL bindings section (forward-compatible with
-        // the webidl bindings proposal) as well as an auxiliary section for all
-        // sorts of miscellaneous information and features #[wasm_bindgen]
-        // supports that aren't covered by WebIDL bindings.
-        webidl::process(&mut module, self.anyref, self.wasm_interface_types, self.emit_start)?;
+        // Process the custom section we extracted earlier. In its stead insert
+        // a forward-compatible wasm interface types section as well as an
+        // auxiliary section for all sorts of miscellaneous information and
+        // features #[wasm_bindgen] supports that aren't covered by wasm
+        // interface types.
+        wit::process(
+            &mut module,
+            programs,
+            self.externref,
+            thread_count,
+            self.emit_start,
+        )?;
 
         // Now that we've got type information from the webidl processing pass,
-        // touch up the output of rustc to insert anyref shims where necessary.
-        // This is only done if the anyref pass is enabled, which it's
-        // currently off-by-default since `anyref` is still in development in
+        // touch up the output of rustc to insert externref shims where necessary.
+        // This is only done if the externref pass is enabled, which it's
+        // currently off-by-default since `externref` is still in development in
         // engines.
-        if self.anyref {
-            anyref::process(&mut module, self.wasm_interface_types)?;
+        //
+        // If the externref pass isn't necessary, then we blanket delete the
+        // export of all our externref intrinsics which will get cleaned up in the
+        // GC pass before JS generation.
+        if self.externref {
+            externref::process(&mut module)?;
+        } else {
+            let ids = module
+                .exports
+                .iter()
+                .filter(|e| e.name.starts_with("__externref"))
+                .map(|e| e.id())
+                .collect::<Vec<_>>();
+            for id in ids {
+                module.exports.delete(id);
+            }
+            // Clean up element segments as well if they have holes in them
+            // after some of our transformations, because non-externref engines
+            // only support contiguous arrays of function references in element
+            // segments.
+            externref::force_contiguous_elements(&mut module)?;
         }
 
+        // Using all of our metadata convert our module to a multi-value using
+        // module if applicable.
+        if self.multi_value {
+            multivalue::run(&mut module)
+                .context("failed to transform return pointers into multi-value Wasm")?;
+        }
+
+        // We've done a whole bunch of transformations to the wasm module, many
+        // of which leave "garbage" lying around, so let's prune out all our
+        // unnecessary things here.
+        gc_module_and_adapters(&mut module);
+
+        let stem = self.stem()?;
+
+        // Now we execute the JS generation passes to actually emit JS/TypeScript/etc.
         let aux = module
             .customs
-            .delete_typed::<webidl::WasmBindgenAux>()
+            .delete_typed::<wit::WasmBindgenAux>()
             .expect("aux section should be present");
-        let bindings = module
+        let adapters = module
             .customs
-            .delete_typed::<webidl::NonstandardWebidlSection>()
+            .delete_typed::<wit::NonstandardWitSection>()
             .unwrap();
-
-        // Now that our module is massaged and good to go, feed it into the JS
-        // shim generation which will actually generate JS for all this.
-        let (npm_dependencies, (js, ts)) = {
-            let mut cx = js::Context::new(&mut module, self)?;
-            cx.generate(&aux, &bindings)?;
-            let npm_dependencies = cx.npm_dependencies.clone();
-            (npm_dependencies, cx.finalize(stem)?)
+        let mut cx = js::Context::new(&mut module, self, &adapters, &aux)?;
+        cx.generate()?;
+        let (js, ts, start) = cx.finalize(stem)?;
+        let generated = Generated {
+            snippets: aux.snippets.clone(),
+            local_modules: aux.local_modules.clone(),
+            mode: self.mode.clone(),
+            typescript: self.typescript,
+            npm_dependencies: cx.npm_dependencies.clone(),
+            js,
+            ts,
+            start,
         };
-
-        if self.wasm_interface_types {
-            webidl::standard::add_section(&mut module, &aux, &bindings)
-                .with_context(|_| "failed to generate a standard wasm bindings custom section")?;
-        }
 
         Ok(Output {
             module,
             stem: stem.to_string(),
-            snippets: aux.snippets.clone(),
-            local_modules: aux.local_modules.clone(),
-            npm_dependencies,
-            js,
-            ts,
-            mode: self.mode.clone(),
-            typescript: self.typescript,
-            wasm_interface_types: self.wasm_interface_types,
+            generated,
         })
+    }
+
+    fn module_from_bytes(&self, bytes: &[u8]) -> Result<Module, Error> {
+        walrus::ModuleConfig::new()
+            // Skip validation of the module as LLVM's output is
+            // generally already well-formed and so we won't gain much
+            // from re-validating. Additionally LLVM's current output
+            // for threads includes atomic instructions but doesn't
+            // include shared memory, so it fails that part of
+            // validation!
+            .strict_validate(false)
+            .generate_dwarf(self.keep_debug)
+            .generate_name_section(!self.remove_name_section)
+            .generate_producers_section(!self.remove_producers_section)
+            .parse(bytes)
+            .context("failed to parse input as wasm")
     }
 
     fn local_module_name(&self, module: &str) -> String {
@@ -404,12 +507,13 @@ fn reset_indentation(s: &str) -> String {
             }
             dst.push_str(line);
         }
-        dst.push_str("\n");
-        if line.ends_with('{') {
+        dst.push('\n');
+        // Ignore { inside of comments and if it's an exported enum
+        if line.ends_with('{') && !line.starts_with('*') && !line.ends_with("Object.freeze({") {
             indent += 1;
         }
     }
-    return dst;
+    dst
 }
 
 // Eventually these will all be CLI options, but while they're unstable features
@@ -440,14 +544,15 @@ fn demangle(module: &mut Module) {
 
 impl OutputMode {
     fn uses_es_modules(&self) -> bool {
-        match self {
+        matches!(
+            self,
             OutputMode::Bundler { .. }
-            | OutputMode::Web
-            | OutputMode::Node {
-                experimental_modules: true,
-            } => true,
-            _ => false,
-        }
+                | OutputMode::Web
+                | OutputMode::Node {
+                    experimental_modules: true,
+                }
+                | OutputMode::Deno
+        )
     }
 
     fn nodejs_experimental_modules(&self) -> bool {
@@ -460,40 +565,25 @@ impl OutputMode {
     }
 
     fn nodejs(&self) -> bool {
-        match self {
-            OutputMode::Node { .. } => true,
-            _ => false,
-        }
+        matches!(self, OutputMode::Node { .. })
     }
 
     fn no_modules(&self) -> bool {
-        match self {
-            OutputMode::NoModules { .. } => true,
-            _ => false,
-        }
-    }
-
-    fn always_run_in_browser(&self) -> bool {
-        match self {
-            OutputMode::Web => true,
-            OutputMode::NoModules { .. } => true,
-            OutputMode::Bundler { browser_only } => *browser_only,
-            _ => false,
-        }
+        matches!(self, OutputMode::NoModules { .. })
     }
 
     fn web(&self) -> bool {
-        match self {
-            OutputMode::Web => true,
-            _ => false,
-        }
+        matches!(self, OutputMode::Web)
     }
 
-    fn bundler(&self) -> bool {
-        match self {
-            OutputMode::Bundler { .. } => true,
-            _ => false,
-        }
+    fn esm_integration(&self) -> bool {
+        matches!(
+            self,
+            OutputMode::Bundler { .. }
+                | OutputMode::Node {
+                    experimental_modules: true,
+                }
+        )
     }
 }
 
@@ -517,57 +607,76 @@ fn unexported_unused_lld_things(module: &mut Module) {
 
 impl Output {
     pub fn js(&self) -> &str {
-        assert!(!self.wasm_interface_types);
-        &self.js
+        &self.generated.js
+    }
+
+    pub fn ts(&self) -> Option<&str> {
+        if self.generated.typescript {
+            Some(&self.generated.ts)
+        } else {
+            None
+        }
+    }
+
+    pub fn start(&self) -> Option<&String> {
+        self.generated.start.as_ref()
+    }
+
+    pub fn snippets(&self) -> &HashMap<String, Vec<String>> {
+        &self.generated.snippets
+    }
+
+    pub fn local_modules(&self) -> &HashMap<String, String> {
+        &self.generated.local_modules
+    }
+
+    pub fn npm_dependencies(&self) -> &HashMap<String, (PathBuf, String)> {
+        &self.generated.npm_dependencies
     }
 
     pub fn wasm(&self) -> &walrus::Module {
         &self.module
     }
 
-    pub fn emit(&self, out_dir: impl AsRef<Path>) -> Result<(), Error> {
+    pub fn wasm_mut(&mut self) -> &mut walrus::Module {
+        &mut self.module
+    }
+
+    pub fn emit(&mut self, out_dir: impl AsRef<Path>) -> Result<(), Error> {
         self._emit(out_dir.as_ref())
     }
 
-    fn _emit(&self, out_dir: &Path) -> Result<(), Error> {
-        let wasm_name = if self.wasm_interface_types {
-            self.stem.clone()
-        } else {
-            format!("{}_bg", self.stem)
-        };
-        let wasm_path = out_dir
-            .join(wasm_name)
-            .with_extension("wasm");
+    fn _emit(&mut self, out_dir: &Path) -> Result<(), Error> {
+        let wasm_name = format!("{}_bg", self.stem);
+        let wasm_path = out_dir.join(&wasm_name).with_extension("wasm");
         fs::create_dir_all(out_dir)?;
-        let wasm_bytes = self.module.emit_wasm()?;
+        let wasm_bytes = self.module.emit_wasm();
         fs::write(&wasm_path, wasm_bytes)
-            .with_context(|_| format!("failed to write `{}`", wasm_path.display()))?;
+            .with_context(|| format!("failed to write `{}`", wasm_path.display()))?;
 
-        if self.wasm_interface_types {
-            return Ok(())
-        }
+        let gen = &self.generated;
 
         // Write out all local JS snippets to the final destination now that
         // we've collected them from all the programs.
-        for (identifier, list) in self.snippets.iter() {
+        for (identifier, list) in gen.snippets.iter() {
             for (i, js) in list.iter().enumerate() {
                 let name = format!("inline{}.js", i);
                 let path = out_dir.join("snippets").join(identifier).join(name);
                 fs::create_dir_all(path.parent().unwrap())?;
                 fs::write(&path, js)
-                    .with_context(|_| format!("failed to write `{}`", path.display()))?;
+                    .with_context(|| format!("failed to write `{}`", path.display()))?;
             }
         }
 
-        for (path, contents) in self.local_modules.iter() {
+        for (path, contents) in gen.local_modules.iter() {
             let path = out_dir.join("snippets").join(path);
             fs::create_dir_all(path.parent().unwrap())?;
             fs::write(&path, contents)
-                .with_context(|_| format!("failed to write `{}`", path.display()))?;
+                .with_context(|| format!("failed to write `{}`", path.display()))?;
         }
 
-        if self.npm_dependencies.len() > 0 {
-            let map = self
+        if !gen.npm_dependencies.is_empty() {
+            let map = gen
                 .npm_dependencies
                 .iter()
                 .map(|(k, v)| (k, &v.1))
@@ -578,104 +687,118 @@ impl Output {
 
         // And now that we've got all our JS and TypeScript, actually write it
         // out to the filesystem.
-        let extension = if self.mode.nodejs_experimental_modules() {
+        let extension = if gen.mode.nodejs_experimental_modules() {
             "mjs"
         } else {
             "js"
         };
+
+        fn write<P, C>(path: P, contents: C) -> Result<(), anyhow::Error>
+        where
+            P: AsRef<Path>,
+            C: AsRef<[u8]>,
+        {
+            fs::write(&path, contents)
+                .with_context(|| format!("failed to write `{}`", path.as_ref().display()))
+        }
+
         let js_path = out_dir.join(&self.stem).with_extension(extension);
-        fs::write(&js_path, reset_indentation(&self.js))
-            .with_context(|_| format!("failed to write `{}`", js_path.display()))?;
 
-        if self.typescript {
+        if gen.mode.esm_integration() {
+            let js_name = format!("{}_bg.{}", self.stem, extension);
+
+            let start = gen.start.as_deref().unwrap_or("");
+
+            write(
+                &js_path,
+                format!(
+                    "import * as wasm from \"./{wasm_name}.wasm\";
+import {{ __wbg_set_wasm }} from \"./{js_name}\";
+__wbg_set_wasm(wasm);
+export * from \"./{js_name}\";
+{start}"
+                ),
+            )?;
+
+            write(out_dir.join(&js_name), reset_indentation(&gen.js))?;
+        } else {
+            write(&js_path, reset_indentation(&gen.js))?;
+        }
+
+        if gen.typescript {
             let ts_path = js_path.with_extension("d.ts");
-            fs::write(&ts_path, &self.ts)
-                .with_context(|_| format!("failed to write `{}`", ts_path.display()))?;
+            fs::write(&ts_path, &gen.ts)
+                .with_context(|| format!("failed to write `{}`", ts_path.display()))?;
         }
 
-        if self.mode.nodejs() {
-            let js_path = wasm_path.with_extension(extension);
-            let shim = self.generate_node_wasm_import(&self.module, &wasm_path);
-            fs::write(&js_path, shim)
-                .with_context(|_| format!("failed to write `{}`", js_path.display()))?;
-        }
-
-        if self.typescript {
-            let ts_path = wasm_path.with_extension("d.ts");
+        if gen.typescript {
+            let ts_path = wasm_path.with_extension("wasm.d.ts");
             let ts = wasm2es6js::typescript(&self.module)?;
             fs::write(&ts_path, ts)
-                .with_context(|_| format!("failed to write `{}`", ts_path.display()))?;
+                .with_context(|| format!("failed to write `{}`", ts_path.display()))?;
         }
 
         Ok(())
     }
+}
 
-    fn generate_node_wasm_import(&self, m: &Module, path: &Path) -> String {
-        let mut imports = BTreeSet::new();
-        for import in m.imports.iter() {
-            imports.insert(&import.module);
+fn gc_module_and_adapters(module: &mut Module) {
+    loop {
+        // Fist up, cleanup the native wasm module. Note that roots can come
+        // from custom sections, namely our wasm interface types custom section
+        // as well as the aux section.
+        walrus::passes::gc::run(module);
+
+        // ... and afterwards we can delete any `implements` directives for any
+        // imports that have been deleted.
+        let imports_remaining = module
+            .imports
+            .iter()
+            .map(|i| i.id())
+            .collect::<HashSet<_>>();
+        let mut section = module
+            .customs
+            .delete_typed::<wit::NonstandardWitSection>()
+            .unwrap();
+        section
+            .implements
+            .retain(|pair| imports_remaining.contains(&pair.0));
+
+        // ... and after we delete the `implements` directive we try to
+        // delete some adapters themselves. If nothing is deleted, then we're
+        // good to go. If something is deleted though then we may have free'd up
+        // some functions in the main module to get deleted, so go again to gc
+        // things.
+        let aux = module.customs.get_typed::<wit::WasmBindgenAux>().unwrap();
+        let any_removed = section.gc(aux);
+        module.customs.add(*section);
+        if !any_removed {
+            break;
         }
-
-        let mut shim = String::new();
-
-        if self.mode.nodejs_experimental_modules() {
-            for (i, module) in imports.iter().enumerate() {
-                shim.push_str(&format!("import * as import{} from '{}';\n", i, module));
-            }
-            // On windows skip the leading `/` which comes out when we parse a
-            // url to use `C:\...` instead of `\C:\...`
-            shim.push_str(&format!(
-                "
-                import * as path from 'path';
-                import * as fs from 'fs';
-                import * as url from 'url';
-                import * as process from 'process';
-
-                let file = path.dirname(url.parse(import.meta.url).pathname);
-                if (process.platform === 'win32') {{
-                    file = file.substring(1);
-                }}
-                const bytes = fs.readFileSync(path.join(file, '{}'));
-            ",
-                path.file_name().unwrap().to_str().unwrap()
-            ));
-        } else {
-            shim.push_str(&format!(
-                "
-                const path = require('path').join(__dirname, '{}');
-                const bytes = require('fs').readFileSync(path);
-            ",
-                path.file_name().unwrap().to_str().unwrap()
-            ));
-        }
-        shim.push_str("let imports = {};\n");
-        for (i, module) in imports.iter().enumerate() {
-            if self.mode.nodejs_experimental_modules() {
-                shim.push_str(&format!("imports['{}'] = import{};\n", module, i));
-            } else {
-                shim.push_str(&format!("imports['{0}'] = require('{0}');\n", module));
-            }
-        }
-
-        shim.push_str(&format!(
-            "
-                const wasmModule = new WebAssembly.Module(bytes);
-                const wasmInstance = new WebAssembly.Instance(wasmModule, imports);
-            ",
-        ));
-
-        if self.mode.nodejs_experimental_modules() {
-            for entry in m.exports.iter() {
-                shim.push_str("export const ");
-                shim.push_str(&entry.name);
-                shim.push_str(" = wasmInstance.exports.");
-                shim.push_str(&entry.name);
-                shim.push_str(";\n");
-            }
-        } else {
-            shim.push_str("module.exports = wasmInstance.exports;\n");
-        }
-
-        reset_indentation(&shim)
     }
+}
+
+/// Returns a sorted iterator over a hash map, sorted based on key.
+///
+/// The intention of this API is to be used whenever the iteration order of a
+/// `HashMap` might affect the generated JS bindings. We want to ensure that the
+/// generated output is deterministic and we do so by ensuring that iteration of
+/// hash maps is consistently sorted.
+fn sorted_iter<K, V>(map: &HashMap<K, V>) -> impl Iterator<Item = (&K, &V)>
+where
+    K: Ord,
+{
+    let mut pairs = map.iter().collect::<Vec<_>>();
+    pairs.sort_by_key(|(k, _)| *k);
+    pairs.into_iter()
+}
+
+/// Like `sorted_iter`, but produces mutable references to the values
+fn sorted_iter_mut<K, V>(map: &mut HashMap<K, V>) -> impl Iterator<Item = (&K, &mut V)>
+where
+    K: Ord,
+{
+    let mut pairs = map.iter_mut().collect::<Vec<_>>();
+    pairs.sort_by_key(|(k, _)| *k);
+    pairs.into_iter()
 }

@@ -28,18 +28,21 @@ interface mixin WindowOrWorkerGlobalScope {
   long setTimeout(Function handler, optional long timeout = 0, any... arguments);
   [Throws]
   long setTimeout(DOMString handler, optional long timeout = 0, any... unused);
-  void clearTimeout(optional long handle = 0);
+  undefined clearTimeout(optional long handle = 0);
   [Throws]
   long setInterval(Function handler, optional long timeout = 0, any... arguments);
   [Throws]
   long setInterval(DOMString handler, optional long timeout = 0, any... unused);
-  void clearInterval(optional long handle = 0);
+  undefined clearInterval(optional long handle = 0);
 
   // ImageBitmap
   [Throws]
-  Promise<ImageBitmap> createImageBitmap(ImageBitmapSource aImage);
+  Promise<ImageBitmap> createImageBitmap(ImageBitmapSource aImage,
+                                         optional ImageBitmapOptions aOptions = {});
   [Throws]
-  Promise<ImageBitmap> createImageBitmap(ImageBitmapSource aImage, long aSx, long aSy, long aSw, long aSh);
+  Promise<ImageBitmap> createImageBitmap(ImageBitmapSource aImage,
+                                         long aSx, long aSy, long aSw, long aSh,
+                                         optional ImageBitmapOptions aOptions = {});
 };
 
 // https://fetch.spec.whatwg.org/#fetch-method
@@ -64,4 +67,9 @@ partial interface mixin WindowOrWorkerGlobalScope {
 partial interface mixin WindowOrWorkerGlobalScope {
   [Throws, Func="mozilla::dom::DOMPrefs::DOMCachesEnabled", SameObject]
   readonly attribute CacheStorage caches;
+};
+
+// https://html.spec.whatwg.org/#microtask-queuing
+partial interface mixin WindowOrWorkerGlobalScope {
+  undefined queueMicrotask(VoidFunction callback);
 };

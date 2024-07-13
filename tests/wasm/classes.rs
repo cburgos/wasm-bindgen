@@ -16,12 +16,14 @@ extern "C" {
     fn js_constructors();
     fn js_empty_structs();
     fn js_public_fields();
+    fn js_getter_with_clone();
     fn js_using_self();
     fn js_readonly_fields();
     fn js_double_consume();
     fn js_js_rename();
     fn js_access_fields();
     fn js_renamed_export();
+    fn js_renamed_field();
     fn js_conditional_bindings();
 
     fn js_assert_none(a: Option<OptionClass>);
@@ -30,6 +32,9 @@ extern "C" {
     fn js_return_none2() -> Option<OptionClass>;
     fn js_return_some(a: OptionClass) -> Option<OptionClass>;
     fn js_test_option_classes();
+    fn js_test_inspectable_classes();
+    fn js_test_inspectable_classes_can_override_generated_methods();
+    fn js_test_class_defined_in_macro();
 }
 
 #[wasm_bindgen_test]
@@ -286,6 +291,38 @@ impl PublicFields {
 }
 
 #[wasm_bindgen_test]
+fn getter_with_clone() {
+    js_getter_with_clone();
+}
+
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Default)]
+pub struct GetterWithCloneStruct {
+    pub a: String,
+}
+
+#[wasm_bindgen]
+impl GetterWithCloneStruct {
+    pub fn new() -> GetterWithCloneStruct {
+        GetterWithCloneStruct::default()
+    }
+}
+
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct GetterWithCloneStructField {
+    #[wasm_bindgen(getter_with_clone)]
+    pub a: String,
+}
+
+#[wasm_bindgen]
+impl GetterWithCloneStructField {
+    pub fn new() -> GetterWithCloneStructField {
+        GetterWithCloneStructField::default()
+    }
+}
+
+#[wasm_bindgen_test]
 fn using_self() {
     js_using_self();
 }
@@ -414,14 +451,33 @@ impl RenamedExport {
     }
     pub fn foo(&self) {}
 
-    pub fn bar(&self, other: &RenamedExport) {
-        drop(other);
-    }
+    pub fn bar(&self, _: &RenamedExport) {}
 }
 
 #[wasm_bindgen_test]
 fn renamed_export() {
     js_renamed_export();
+}
+
+#[wasm_bindgen]
+pub struct RenamedField {
+    #[wasm_bindgen(js_name = bar)]
+    pub foo: u32,
+}
+
+#[wasm_bindgen(js_class = RenamedField)]
+impl RenamedField {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> RenamedField {
+        RenamedField { foo: 3 }
+    }
+
+    pub fn foo(&self) {}
+}
+
+#[wasm_bindgen_test]
+fn renamed_field() {
+    js_renamed_field();
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -488,4 +544,90 @@ mod works_in_module {
 
         pub fn foo(&self) {}
     }
+}
+
+#[wasm_bindgen_test]
+fn inspectable_classes() {
+    js_test_inspectable_classes();
+}
+
+#[wasm_bindgen(inspectable)]
+#[derive(Default)]
+pub struct Inspectable {
+    pub a: u32,
+    // This private field will not be exposed unless a getter is provided for it
+    #[allow(dead_code)]
+    private: u32,
+}
+
+#[wasm_bindgen]
+impl Inspectable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct NotInspectable {
+    pub a: u32,
+}
+
+#[wasm_bindgen]
+impl NotInspectable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn inspectable_classes_can_override_generated_methods() {
+    js_test_inspectable_classes_can_override_generated_methods();
+}
+
+#[wasm_bindgen(inspectable)]
+#[derive(Default)]
+pub struct OverriddenInspectable {
+    pub a: u32,
+}
+
+#[wasm_bindgen]
+impl OverriddenInspectable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[wasm_bindgen(js_name = toJSON)]
+    pub fn js_to_json(&self) -> String {
+        String::from("JSON was overwritten")
+    }
+
+    #[wasm_bindgen(js_name = toString)]
+    pub fn js_to_string(&self) -> String {
+        String::from("string was overwritten")
+    }
+}
+
+macro_rules! make_struct {
+    ($field:ident) => {
+        #[wasm_bindgen]
+        pub struct InsideMacro {
+            pub $field: u32,
+        }
+    };
+}
+
+make_struct!(a);
+
+#[wasm_bindgen]
+impl InsideMacro {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { a: 3 }
+    }
+}
+
+#[wasm_bindgen_test]
+fn class_defined_in_macro() {
+    js_test_class_defined_in_macro();
 }

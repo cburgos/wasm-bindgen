@@ -25,6 +25,26 @@ class Construct {
   assert_internal_string(s) {
     assert.strictEqual(this.internal_string, s);
   }
+
+  ["kebab-case"]() {
+    return 42;
+  }
+  
+  get ["kebab-case-val"]() {
+    return 42;
+  }
+
+  set ["kebab-case-val"](val) {}
+
+  static ["static-kebab-case"]() {
+    return 42;
+  }
+
+  static get ["static-kebab-case-val"]() {
+    return 42;
+  }
+
+  static set ["static-kebab-case-val"](val) {}
 }
 
 Construct.internal_string = '';
@@ -140,3 +160,31 @@ exports.StaticStructural = class {
     return x + 3;
   }
 };
+
+class InnerClass {
+  static inner_static_function(x) {
+    return x + 5;
+  }
+
+  static create_inner_instance() {
+    const ret = new InnerClass();
+    ret.internal_int = 3;
+    return ret;
+  }
+
+  get_internal_int() {
+    return this.internal_int;
+  }
+
+  append_to_internal_int(i) {
+    this.internal_int += i;
+  }
+
+  assert_internal_int(i) {
+    assert.strictEqual(this.internal_int, i);
+  }
+}
+
+exports.nestedNamespace = {
+  InnerClass: InnerClass
+}

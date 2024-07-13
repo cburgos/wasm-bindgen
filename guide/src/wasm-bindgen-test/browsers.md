@@ -10,6 +10,21 @@ use wasm_bindgen_test::wasm_bindgen_test_configure;
 wasm_bindgen_test_configure!(run_in_browser);
 ```
 
+Or if you need to run your tests inside a web worker, you can also
+configured it using the `wasm_bindgen_test_configure` macro as following
+snippet.
+
+```rust
+use wasm_bindgen_test::wasm_bindgen_test_configure;
+
+// Run in dedicated worker.
+wasm_bindgen_test_configure!(run_in_dedicated_worker);
+// Or run in shared worker.
+wasm_bindgen_test_configure!(run_in_shared_worker);
+// Or run in service worker.
+wasm_bindgen_test_configure!(run_in_service_worker);
+```
+
 Note that although a particular test crate must target either headless browsers
 or Node.js, you can have test suites for both Node.js and browsers for your
 project by using multiple test crates. For example:
@@ -17,8 +32,11 @@ project by using multiple test crates. For example:
 ```
 $MY_CRATE/
 `-- tests
-    |-- node.rs    # The tests in this suite use the default Node.js.
-    `-- web.rs     # The tests in this suite are configured for browsers.
+    |-- node.rs              # The tests in this suite use the default Node.js.
+    |-- dedicated_worker.rs  # The tests in this suite are configured for dedicated workers.
+    |-- shared_worker.rs     # The tests in this suite are configured for shared workers.
+    |-- service_worker.rs    # The tests in this suite are configured for service workers.
+    `-- web.rs               # The tests in this suite are configured for browsers.
 ```
 
 ## Configuring Which Browser is Used
@@ -45,6 +63,35 @@ test` with the appropriate browser flags and `--headless`:
 ```bash
 wasm-pack test --headless --chrome --firefox --safari
 ```
+
+## Configuring Headless Browser capabilities
+
+Add the file `webdriver.json` to the root of your crate. Each browser has own 
+section for capabilities. For example:
+
+```json
+{
+  "moz:firefoxOptions": {
+    "prefs": {
+      "media.navigator.streams.fake": true,
+      "media.navigator.permission.disabled": true
+    },
+    "args": []
+  },
+  "goog:chromeOptions": {
+    "args": [
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream"
+    ]
+  }
+}
+```
+Full list supported capabilities can be found:
+
+* for Chrome - [here](https://peter.sh/experiments/chromium-command-line-switches/)
+* for Firefox - [here](https://developer.mozilla.org/en-US/docs/Web/WebDriver/Capabilities/firefoxOptions)
+
+Note that the `headless` argument is always enabled for both browsers.
 
 ### Debugging Headless Browser Tests
 
@@ -91,6 +138,15 @@ WebDriver.
 
 This is installed by default on Mac OS. It should be able to find your Safari
 installation by default.
+
+### Running the Tests in the Remote Headless Browser
+
+Tests can be run on a remote webdriver. To do this, the above environment 
+variables must be set as URL to the remote webdriver. For example:
+
+```
+CHROMEDRIVER_REMOTE=http://remote.host/
+```
 
 ### Running the Tests in the Headless Browser
 

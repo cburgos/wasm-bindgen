@@ -1,6 +1,5 @@
 use js_sys::*;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
 
 macro_rules! each {
@@ -17,7 +16,7 @@ macro_rules! each {
     };
 }
 
-macro_rules! test_inheritence {
+macro_rules! test_inheritance {
     ($arr:ident) => {{
         let arr = $arr::new(&JsValue::undefined());
         assert!(arr.is_instance_of::<$arr>());
@@ -26,8 +25,8 @@ macro_rules! test_inheritence {
     }};
 }
 #[wasm_bindgen_test]
-fn inheritence() {
-    each!(test_inheritence);
+fn inheritance() {
+    each!(test_inheritance);
 }
 
 macro_rules! test_undefined {
@@ -89,6 +88,49 @@ fn new_fill() {
     each!(test_fill);
 }
 
+macro_rules! test_at {
+    ($arr:ident) => {{
+        let arr = $arr::new(&2.into());
+        arr.set_index(1, 1 as _);
+        assert_eq!(arr.at(-1).unwrap() as f64, 1 as f64);
+    }};
+}
+#[wasm_bindgen_test]
+fn new_at() {
+    each!(test_at);
+}
+
+macro_rules! test_copy_within {
+    ($arr:ident) => {{
+        let x: Vec<_> = vec![8, 5, 4, 3, 1, 2];
+        let array = $arr::from(x.into_iter().map(|v| v as _).collect::<Vec<_>>().as_slice());
+        array.copy_within(1, 4, 5);
+
+        assert_eq!(array.get_index(1) as f64, 1f64);
+
+        // if negatives were used
+        array.copy_within(-1, -3, -2);
+        assert_eq!(array.get_index(5) as f64, 3f64);
+    }};
+}
+#[wasm_bindgen_test]
+fn new_copy_within() {
+    each!(test_copy_within);
+}
+
+macro_rules! test_get_set {
+    ($arr:ident) => {{
+        let arr = $arr::new(&1.into());
+        assert_eq!(arr.get_index(0) as f64, 0 as f64);
+        arr.set_index(0, 1 as _);
+        assert_eq!(arr.get_index(0) as f64, 1 as f64);
+    }};
+}
+#[wasm_bindgen_test]
+fn new_get_set() {
+    each!(test_get_set);
+}
+
 macro_rules! test_slice {
     ($arr:ident) => {{
         let arr = $arr::new(&4.into());
@@ -130,4 +172,21 @@ fn copy_to() {
     for i in x.iter() {
         assert_eq!(*i, 5);
     }
+}
+
+#[wasm_bindgen_test]
+fn copy_from() {
+    let x = [1, 2, 3];
+    let array = Int32Array::new(&3.into());
+    array.copy_from(&x);
+    array.for_each(&mut |x, i, _| {
+        assert_eq!(x, (i + 1) as i32);
+    });
+}
+
+#[wasm_bindgen_test]
+fn to_vec() {
+    let array = Int32Array::new(&10.into());
+    array.fill(5, 0, 10);
+    assert_eq!(array.to_vec(), vec![5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
 }

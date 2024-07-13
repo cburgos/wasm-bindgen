@@ -4,7 +4,39 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use failure::{Error, ResultExt};
+use anyhow::{Context, Error};
+
+// depends on the variable 'wasm' and initializes te WasmBindgenTestContext cx
+pub const SHARED_SETUP: &str = r#"
+const handlers = {};
+
+const wrap = method => {
+    const og = console[method];
+    const on_method = `on_console_${method}`;
+    console[method] = function (...args) {
+        og.apply(this, args);
+        if (handlers[on_method]) {
+            handlers[on_method](args);
+        }
+    };
+};
+
+// override `console.log` and `console.error` etc... before we import tests to
+// ensure they're bound correctly in wasm. This'll allow us to intercept
+// all these calls and capture the output of tests
+wrap("debug");
+wrap("log");
+wrap("info");
+wrap("warn");
+wrap("error");
+
+cx = new wasm.WasmBindgenTestContext();
+handlers.on_console_debug = wasm.__wbgtest_console_debug;
+handlers.on_console_log = wasm.__wbgtest_console_log;
+handlers.on_console_info = wasm.__wbgtest_console_info;
+handlers.on_console_warn = wasm.__wbgtest_console_warn;
+handlers.on_console_error = wasm.__wbgtest_console_error;
+"#;
 
 pub fn execute(
     module: &str,
@@ -15,56 +47,28 @@ pub fn execute(
     let mut js_to_execute = format!(
         r#"
         const {{ exit }} = require('process');
+        const wasm = require("./{0}");
 
-        const handlers = {{}};
-
-        const wrap = method => {{
-            const og = console[method];
-            const on_method = `on_console_${{method}}`;
-            console[method] = function (...args) {{
-                og.apply(this, args);
-                if (handlers[on_method]) {{
-                    handlers[on_method](args);
-                }}
-            }};
-        }};
-
-        // override `console.log` and `console.error` etc... before we import tests to
-        // ensure they're bound correctly in wasm. This'll allow us to intercept
-        // all these calls and capture the output of tests
-        wrap("debug");
-        wrap("log");
-        wrap("info");
-        wrap("warn");
-        wrap("error");
+        {console_override}
 
         global.__wbg_test_invoke = f => f();
 
         async function main(tests) {{
-            const support = require("./{0}");
-            const wasm = require("./{0}_bg");
-
-            cx = new support.WasmBindgenTestContext();
-            handlers.on_console_debug = support.__wbgtest_console_debug;
-            handlers.on_console_log = support.__wbgtest_console_log;
-            handlers.on_console_info = support.__wbgtest_console_info;
-            handlers.on_console_warn = support.__wbgtest_console_warn;
-            handlers.on_console_error = support.__wbgtest_console_error;
-
             // Forward runtime arguments. These arguments are also arguments to the
             // `wasm-bindgen-test-runner` which forwards them to node which we
             // forward to the test harness. this is basically only used for test
             // filters for now.
             cx.args(process.argv.slice(2));
 
-            const ok = await cx.run(tests.map(n => wasm[n]));
+            const ok = await cx.run(tests.map(n => wasm.__wasm[n]));
             if (!ok)
                 exit(1);
         }}
 
         const tests = [];
     "#,
-        module
+        module,
+        console_override = SHARED_SETUP,
     );
 
     // Note that we're collecting *JS objects* that represent the functions to
@@ -96,13 +100,14 @@ pub fn execute(
     path.push(tmpdir.to_path_buf());
     let extra_node_args = env::var("NODE_ARGS")
         .unwrap_or_default()
-        .split(",")
+        .split(',')
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>();
     exec(
         Command::new("node")
             .env("NODE_PATH", env::join_paths(&path).unwrap())
+            .arg("--expose-gc")
             .args(&extra_node_args)
             .arg(&js_path)
             .args(args),
@@ -110,15 +115,13 @@ pub fn execute(
 }
 
 #[cfg(unix)]
-fn exec(cmd: &mut Command) -> Result<(), Error> {
+pub fn exec(cmd: &mut Command) -> Result<(), Error> {
     use std::os::unix::prelude::*;
-    Err(Error::from(cmd.exec())
-        .context("failed to execute `node`")
-        .into())
+    Err(Error::from(cmd.exec()).context("failed to execute `node`"))
 }
 
 #[cfg(windows)]
-fn exec(cmd: &mut Command) -> Result<(), Error> {
+pub fn exec(cmd: &mut Command) -> Result<(), Error> {
     use std::process;
     let status = cmd.status()?;
     process::exit(status.code().unwrap_or(3));

@@ -1,7 +1,6 @@
+use crate::generated::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
-
-include!(concat!(env!("OUT_DIR"), "/dictionary.rs"));
 
 #[wasm_bindgen]
 extern "C" {
@@ -55,5 +54,5 @@ fn required() {
 
 #[wasm_bindgen_test]
 fn correct_casing_in_js() {
-    assert_camel_case(PreserveNames::new().wierd_field_name(1));
+    assert_camel_case(PreserveNames::new().weird_field_name(1));
 }

@@ -14,7 +14,7 @@ fn no_modules_rejects_npm() {
                 }
 
                 #[wasm_bindgen(start)]
-                pub fn main() {
+                fn main() {
                     foo();
                 }
             "#,
@@ -25,8 +25,8 @@ fn no_modules_rejects_npm() {
         .stderr(
             str::is_match(
                 "\
-error: NPM dependencies have been specified in `.*` but this is only \
-compatible with the `bundler` and `nodejs` targets
+error: NPM dependencies have been specified in `.*` but \
+this is incompatible with the `no-modules` target
 ",
             )
             .unwrap(),
@@ -35,8 +35,8 @@ compatible with the `bundler` and `nodejs` targets
 }
 
 #[test]
-fn more_package_json_fields_rejected() {
-    let (mut cmd, _out_dir) = Project::new("more_package_json_fields_rejected")
+fn more_package_json_fields_ignored() {
+    let (mut cmd, _out_dir) = Project::new("more_package_json_fields_ignored")
         .file(
             "src/lib.rs",
             r#"
@@ -48,7 +48,7 @@ fn more_package_json_fields_rejected() {
                 }
 
                 #[wasm_bindgen(start)]
-                pub fn main() {
+                fn main() {
                     foo();
                 }
             "#,
@@ -63,16 +63,7 @@ fn more_package_json_fields_rejected() {
             "#,
         )
         .wasm_bindgen("");
-    cmd.assert()
-        .stderr(
-            str::is_match(
-                "\
-error: NPM manifest found at `.*` can currently only have one key, .*
-",
-            )
-            .unwrap(),
-        )
-        .failure();
+    cmd.assert().success();
 }
 
 #[test]
@@ -111,7 +102,7 @@ fn npm_conflict_rejected() {
                 }
 
                 #[wasm_bindgen(start)]
-                pub fn main() {
+                fn main() {
                     foo();
                     bar::foo();
                 }

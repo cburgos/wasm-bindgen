@@ -10,7 +10,6 @@
  * liability, trademark and document use rules apply.
  */
 
-[RustDeprecated="doesn't exist in Safari, use parent class methods instead"]
 interface AudioScheduledSourceNode : AudioNode {
 };
 
@@ -19,8 +18,8 @@ AudioScheduledSourceNode includes rustAudioScheduledSourceNode;
 interface mixin rustAudioScheduledSourceNode {
                     attribute EventHandler onended;
     [Throws]
-    void start (optional double when = 0);
+    undefined start (optional double when = 0);
 
     [Throws]
-    void stop (optional double when = 0);
+    undefined stop (optional double when = 0);
 };

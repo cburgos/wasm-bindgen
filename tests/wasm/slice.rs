@@ -22,7 +22,7 @@ extern "C" {
 }
 
 macro_rules! export_macro {
-    ($(($i:ident, $n:ident))*) => ($(
+    ($(($i:ident, $n:ident, $optional_n:ident))*) => ($(
         #[wasm_bindgen]
         pub fn $n(a: &[$i]) -> Vec<$i> {
             assert_eq!(a.len(), 2);
@@ -30,20 +30,30 @@ macro_rules! export_macro {
             assert_eq!(a[1], 2 as $i);
             a.to_vec()
         }
+
+        #[wasm_bindgen]
+        pub fn $optional_n(a: Option<Vec<$i>>) -> Option<Vec<$i>> {
+            a.map(|a| {
+                assert_eq!(a.len(), 2);
+                assert_eq!(a[0], 1 as $i);
+                assert_eq!(a[1], 2 as $i);
+                a.to_vec()
+            })
+        }
     )*)
 }
 
 export_macro! {
-    (i8, export_i8)
-    (u8, export_u8)
-    (i16, export_i16)
-    (u16, export_u16)
-    (i32, export_i32)
-    (u32, export_u32)
-    (isize, export_isize)
-    (usize, export_usize)
-    (f32, export_f32)
-    (f64, export_f64)
+    (i8, export_i8, export_optional_i8)
+    (u8, export_u8, export_optional_u8)
+    (i16, export_i16, export_optional_i16)
+    (u16, export_u16, export_optional_u16)
+    (i32, export_i32, export_optional_i32)
+    (u32, export_u32, export_optional_u32)
+    (isize, export_isize, export_optional_isize)
+    (usize, export_usize, export_optional_usize)
+    (f32, export_f32, export_optional_f32)
+    (f64, export_f64, export_optional_f64)
 }
 
 #[wasm_bindgen_test]
@@ -55,7 +65,7 @@ macro_rules! import_macro {
     ($(($rust:ident, $js:ident, $i:ident))*) => ($(
         #[wasm_bindgen(module = "tests/wasm/slice.js")]
         extern "C" {
-            fn $js(a: &[$i]) -> Vec<$i>;
+            fn $js(a: &[$i], b: Option<&[$i]>, c: Option<&[$i]>) -> Vec<$i>;
         }
 
         #[wasm_bindgen]
@@ -63,7 +73,7 @@ macro_rules! import_macro {
             assert_eq!(a.len(), 2);
             assert_eq!(a[0], 1 as $i);
             assert_eq!(a[1], 2 as $i);
-            $js(a)
+            $js(a, Some(a), None)
         }
     )*)
 }
@@ -120,19 +130,27 @@ macro_rules! import_mut_macro {
         $(
             #[wasm_bindgen(module = "tests/wasm/slice.js")]
             extern "C" {
-                fn $js(a: &mut [$i]);
+                fn $js(a: &mut [$i], b: Option<&mut [$i]>, c: Option<&mut [$i]>);
             }
 
             fn $rust() {
-                let mut buf = [
+                let mut buf1 = [
                     1 as $i,
                     2 as $i,
                     3 as $i,
                 ];
-                $js(&mut buf);
-                assert_eq!(buf[0], 4 as $i);
-                assert_eq!(buf[1], 5 as $i);
-                assert_eq!(buf[2], 3 as $i);
+                let mut buf2 = [
+                    4 as $i,
+                    5 as $i,
+                    6 as $i,
+                ];
+                $js(&mut buf1, Some(&mut buf2), None);
+                assert_eq!(buf1[0], 4 as $i);
+                assert_eq!(buf1[1], 5 as $i);
+                assert_eq!(buf1[2], 3 as $i);
+                assert_eq!(buf2[0], 8 as $i);
+                assert_eq!(buf2[1], 7 as $i);
+                assert_eq!(buf2[2], 6 as $i);
             }
         )*
 
@@ -203,6 +221,7 @@ pub struct ReturnVecApplication {
 
 #[wasm_bindgen]
 impl ReturnVecApplication {
+    #[allow(clippy::vec_init_then_push)]
     pub fn new() -> ReturnVecApplication {
         let mut thing = vec![];
         thing.push(0);
@@ -214,6 +233,7 @@ impl ReturnVecApplication {
         ReturnVecApplication { thing }
     }
 
+    #[allow(clippy::assigning_clones)] // false positive, should be fixed by https://github.com/rust-lang/rust-clippy/pull/12756
     pub fn tick(&mut self) {
         self.thing = self.thing.clone();
     }

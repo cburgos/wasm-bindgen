@@ -10,8 +10,15 @@
  * liability, trademark and document use rules apply.
  */
 
+enum AudioContextLatencyCategory {
+    "balanced",
+    "interactive",
+    "playback"
+};
+
 dictionary AudioContextOptions {
-             float        sampleRate = 0;
+    (AudioContextLatencyCategory or double) latencyHint = "interactive";
+    float        sampleRate = 0;
 };
 
 [Pref="dom.webaudio.enabled",
@@ -22,9 +29,9 @@ interface AudioContext : BaseAudioContext {
     // Bug 1324545: AudioTimestamp                  getOutputTimestamp ();
 
     [Throws]
-    Promise<void> suspend();
+    Promise<undefined> suspend();
     [Throws]
-    Promise<void> close();
+    Promise<undefined> close();
 
     [NewObject, Throws]
     MediaElementAudioSourceNode createMediaElementSource(HTMLMediaElement mediaElement);

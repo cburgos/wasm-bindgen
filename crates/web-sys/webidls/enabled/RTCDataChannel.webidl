@@ -17,6 +17,7 @@ enum RTCDataChannelType {
 interface RTCDataChannel : EventTarget
 {
   readonly attribute DOMString label;
+  readonly attribute unsigned short? id;
   readonly attribute boolean reliable;
   readonly attribute unsigned short? maxPacketLifeTime;
   readonly attribute unsigned short? maxRetransmits;
@@ -26,16 +27,16 @@ interface RTCDataChannel : EventTarget
   attribute EventHandler onopen;
   attribute EventHandler onerror;
   attribute EventHandler onclose;
-  void close();
+  undefined close();
   attribute EventHandler onmessage;
   attribute EventHandler onbufferedamountlow;
   attribute RTCDataChannelType binaryType;
   [Throws]
-  void send(DOMString data);
+  undefined send(DOMString data);
   [Throws]
-  void send(Blob data);
+  undefined send(Blob data);
   [Throws]
-  void send(ArrayBuffer data);
+  undefined send(ArrayBuffer data);
   [Throws]
-  void send(ArrayBufferView data);
+  undefined send(ArrayBufferView data);
 };

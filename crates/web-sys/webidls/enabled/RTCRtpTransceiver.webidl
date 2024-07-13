@@ -17,8 +17,7 @@ enum RTCRtpTransceiverDirection {
 dictionary RTCRtpTransceiverInit {
     RTCRtpTransceiverDirection         direction = "sendrecv";
     sequence<MediaStream>              streams = [];
-    // TODO: bug 1396918
-    // sequence<RTCRtpEncodingParameters> sendEncodings;
+    sequence<RTCRtpEncodingParameters> sendEncodings = [];
 };
 
 [Pref="media.peerconnection.enabled",
@@ -33,12 +32,11 @@ interface RTCRtpTransceiver {
              attribute RTCRtpTransceiverDirection  direction;
     readonly attribute RTCRtpTransceiverDirection? currentDirection;
 
-    void stop();
-    // TODO: bug 1396922
-    // void setCodecPreferences(sequence<RTCRtpCodecCapability> codecs);
+    undefined stop();
+    undefined setCodecPreferences(sequence<RTCRtpCodecCapability> codecs);
 
     [ChromeOnly]
-    void setRemoteTrackId(DOMString trackId);
+    undefined setRemoteTrackId(DOMString trackId);
     [ChromeOnly]
     boolean remoteTrackIdIs(DOMString trackId);
 
@@ -47,31 +45,31 @@ interface RTCRtpTransceiver {
     DOMString getRemoteTrackId();
 
     [ChromeOnly]
-    void setAddTrackMagic();
+    undefined setAddTrackMagic();
     [ChromeOnly]
     readonly attribute boolean addTrackMagic;
     [ChromeOnly]
     attribute boolean shouldRemove;
     [ChromeOnly]
-    void setCurrentDirection(RTCRtpTransceiverDirection direction);
+    undefined setCurrentDirection(RTCRtpTransceiverDirection direction);
     [ChromeOnly]
-    void setDirectionInternal(RTCRtpTransceiverDirection direction);
+    undefined setDirectionInternal(RTCRtpTransceiverDirection direction);
     [ChromeOnly]
-    void setMid(DOMString mid);
+    undefined setMid(DOMString mid);
     [ChromeOnly]
-    void unsetMid();
+    undefined unsetMid();
     [ChromeOnly]
-    void setStopped();
+    undefined setStopped();
 
     [ChromeOnly]
     DOMString getKind();
     [ChromeOnly]
     boolean hasBeenUsedToSend();
     [ChromeOnly]
-    void sync();
+    undefined sync();
 
     [ChromeOnly]
-    void insertDTMF(DOMString tones,
+    undefined insertDTMF(DOMString tones,
                     optional unsigned long duration = 100,
                     optional unsigned long interToneGap = 70);
 };

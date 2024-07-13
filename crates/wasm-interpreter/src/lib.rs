@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use walrus::ir::Instr;
-use walrus::{FunctionId, LocalId, Module, TableId};
+use walrus::{ElementId, FunctionId, LocalId, Module, TableId};
 
 /// A ready-to-go interpreter of a wasm module.
 ///
@@ -65,14 +65,12 @@ impl Interpreter {
     ///
     /// Note that the `module` passed in to this function must be the same as
     /// the `module` passed to `interpret` below.
-    pub fn new(module: &Module) -> Result<Interpreter, failure::Error> {
+    pub fn new(module: &Module) -> Result<Interpreter, anyhow::Error> {
         let mut ret = Interpreter::default();
 
-        // The descriptor functions shouldn't really use all that much memory
-        // (the LLVM call stack, now the wasm stack). To handle that let's give
-        // our selves a little bit of memory and set the stack pointer (global
-        // 0) to the top.
-        ret.mem = vec![0; 0x100];
+        // Give ourselves some memory and set the stack pointer
+        // (the LLVM call stack, now the wasm stack, global 0) to the top.
+        ret.mem = vec![0; 0x8000];
         ret.sp = ret.mem.len() as i32;
 
         // Figure out where the `__wbindgen_describe` imported function is, if
@@ -105,7 +103,7 @@ impl Interpreter {
 
         ret.functions = module.tables.main_function_table()?;
 
-        return Ok(ret);
+        Ok(ret)
     }
 
     /// Interprets the execution of the descriptor function `func`.
@@ -159,7 +157,7 @@ impl Interpreter {
         &mut self,
         id: FunctionId,
         module: &Module,
-        entry_removal_list: &mut HashSet<usize>,
+        entry_removal_list: &mut HashSet<(ElementId, usize)>,
     ) -> Option<&[u32]> {
         // Call the `id` function. This is an internal `#[inline(never)]`
         // whose code is completely controlled by the `wasm-bindgen` crate, so
@@ -184,28 +182,19 @@ impl Interpreter {
 
         let args = vec![0; num_params];
         self.call(id, module, &args);
-        let descriptor_table_idx =
-            self.descriptor_table_idx
-                .take()
-                .expect("descriptor function should return index") as usize;
+        let descriptor_table_idx = self
+            .descriptor_table_idx
+            .take()
+            .expect("descriptor function should return index");
 
         // After we've got the table index of the descriptor function we're
         // interested go take a look in the function table to find what the
         // actual index of the function is.
-        let functions = self.functions.expect("function table should be present");
-        let functions = match &module.tables.get(functions).kind {
-            walrus::TableKind::Function(f) => f,
-            _ => unreachable!(),
-        };
-        let descriptor_id = functions
-            .elements
-            .get(descriptor_table_idx)
-            .expect("out of bounds read of function table")
-            .expect("attempting to execute null function");
-
-        // This is used later to actually remove the entry from the table, but
-        // we don't do the removal just yet
-        entry_removal_list.insert(descriptor_table_idx);
+        let entry =
+            wasm_bindgen_wasm_conventions::get_function_table_entry(module, descriptor_table_idx)
+                .expect("failed to find entry in function table");
+        let descriptor_id = entry.func.expect("element segment slot wasn't set");
+        entry_removal_list.insert((entry.element, entry.idx));
 
         // And now execute the descriptor!
         self.interpret_descriptor(descriptor_id, module)
@@ -246,7 +235,7 @@ impl Interpreter {
             frame.locals.insert(*arg, *val);
         }
 
-        for instr in block.instrs.iter() {
+        for (instr, _) in block.instrs.iter() {
             frame.eval(instr);
             if frame.done {
                 break;
@@ -279,6 +268,10 @@ impl Frame<'_> {
                 let val = stack.pop().unwrap();
                 self.locals.insert(e.local, val);
             }
+            Instr::LocalTee(e) => {
+                let val = *stack.last().unwrap();
+                self.locals.insert(e.local, val);
+            }
 
             // Blindly assume all globals are the stack pointer
             Instr::GlobalGet(_) => stack.push(self.interp.sp),
@@ -304,6 +297,10 @@ impl Frame<'_> {
             // theory there doesn't need to be.
             Instr::Load(e) => {
                 let address = stack.pop().unwrap();
+                assert!(
+                    address > 0,
+                    "Read a negative address value from the stack. Did we run out of memory?"
+                );
                 let address = address as u32 + e.arg.offset;
                 assert!(address % 4 == 0);
                 stack.push(self.interp.mem[address as usize / 4])
@@ -311,6 +308,10 @@ impl Frame<'_> {
             Instr::Store(e) => {
                 let value = stack.pop().unwrap();
                 let address = stack.pop().unwrap();
+                assert!(
+                    address > 0,
+                    "Read a negative address value from the stack. Did we run out of memory?"
+                );
                 let address = address as u32 + e.arg.offset;
                 assert!(address % 4 == 0);
                 self.interp.mem[address as usize / 4] = value;
@@ -344,8 +345,8 @@ impl Frame<'_> {
                 // effects we're interested in.
                 } else if Some(e.func) == self.interp.describe_closure_id {
                     let val = stack.pop().unwrap();
-                    drop(stack.pop());
-                    drop(stack.pop());
+                    stack.pop();
+                    stack.pop();
                     log::debug!("__wbindgen_describe_closure({})", val);
                     self.interp.descriptor_table_idx = Some(val as u32);
                     stack.push(0)

@@ -28,6 +28,11 @@ interface Blob {
   Blob slice([Clamp] optional long long start,
              [Clamp] optional long long end,
              optional DOMString contentType);
+
+  // read from the Blob.
+  [NewObject] ReadableStream stream();
+  [NewObject] Promise<DOMString> text();
+  [NewObject] Promise<ArrayBuffer> arrayBuffer();
 };
 
 enum EndingTypes { "transparent", "native" };

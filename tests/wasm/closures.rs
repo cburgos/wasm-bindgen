@@ -1,5 +1,4 @@
-#![cfg(feature = "nightly")]
-
+use js_sys::Number;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -7,89 +6,97 @@ use wasm_bindgen_test::*;
 
 #[wasm_bindgen(module = "tests/wasm/closures.js")]
 extern "C" {
-    fn works_call(a: &Fn());
-    fn works_thread(a: &Fn(u32) -> u32) -> u32;
+    fn works_call(a: &dyn Fn());
+    fn works_thread(a: &dyn Fn(u32) -> u32) -> u32;
 
-    fn cannot_reuse_call(a: &Fn());
+    fn cannot_reuse_call(a: &dyn Fn());
     #[wasm_bindgen(catch)]
     fn cannot_reuse_call_again() -> Result<(), JsValue>;
 
-    fn long_lived_call1(a: &Closure<Fn()>);
-    fn long_lived_call2(a: &Closure<FnMut(u32) -> u32>) -> u32;
+    fn long_lived_call1(a: &Closure<dyn Fn()>);
+    fn long_lived_call2(a: &Closure<dyn FnMut(u32) -> u32>) -> u32;
 
-    fn many_arity_call1(a: &Closure<Fn()>);
-    fn many_arity_call2(a: &Closure<Fn(u32)>);
-    fn many_arity_call3(a: &Closure<Fn(u32, u32)>);
-    fn many_arity_call4(a: &Closure<Fn(u32, u32, u32)>);
-    fn many_arity_call5(a: &Closure<Fn(u32, u32, u32, u32)>);
-    fn many_arity_call6(a: &Closure<Fn(u32, u32, u32, u32, u32)>);
-    fn many_arity_call7(a: &Closure<Fn(u32, u32, u32, u32, u32, u32)>);
-    fn many_arity_call8(a: &Closure<Fn(u32, u32, u32, u32, u32, u32, u32)>);
-    fn many_arity_call9(a: &Closure<Fn(u32, u32, u32, u32, u32, u32, u32, u32)>);
-
-    #[wasm_bindgen(js_name = many_arity_call1)]
-    fn many_arity_call_mut1(a: &Closure<FnMut()>);
-    #[wasm_bindgen(js_name = many_arity_call2)]
-    fn many_arity_call_mut2(a: &Closure<FnMut(u32)>);
-    #[wasm_bindgen(js_name = many_arity_call3)]
-    fn many_arity_call_mut3(a: &Closure<FnMut(u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call4)]
-    fn many_arity_call_mut4(a: &Closure<FnMut(u32, u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call5)]
-    fn many_arity_call_mut5(a: &Closure<FnMut(u32, u32, u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call6)]
-    fn many_arity_call_mut6(a: &Closure<FnMut(u32, u32, u32, u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call7)]
-    fn many_arity_call_mut7(a: &Closure<FnMut(u32, u32, u32, u32, u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call8)]
-    fn many_arity_call_mut8(a: &Closure<FnMut(u32, u32, u32, u32, u32, u32, u32)>);
-    #[wasm_bindgen(js_name = many_arity_call9)]
-    fn many_arity_call_mut9(a: &Closure<FnMut(u32, u32, u32, u32, u32, u32, u32, u32)>);
+    fn many_arity_call1(a: &Closure<dyn Fn()>);
+    fn many_arity_call2(a: &Closure<dyn Fn(u32)>);
+    fn many_arity_call3(a: &Closure<dyn Fn(u32, u32)>);
+    fn many_arity_call4(a: &Closure<dyn Fn(u32, u32, u32)>);
+    fn many_arity_call5(a: &Closure<dyn Fn(u32, u32, u32, u32)>);
+    fn many_arity_call6(a: &Closure<dyn Fn(u32, u32, u32, u32, u32)>);
+    fn many_arity_call7(a: &Closure<dyn Fn(u32, u32, u32, u32, u32, u32)>);
+    fn many_arity_call8(a: &Closure<dyn Fn(u32, u32, u32, u32, u32, u32, u32)>);
+    fn many_arity_call9(a: &Closure<dyn Fn(u32, u32, u32, u32, u32, u32, u32, u32)>);
 
     #[wasm_bindgen(js_name = many_arity_call1)]
-    fn many_arity_stack1(a: &Fn());
+    fn many_arity_call_mut1(a: &Closure<dyn FnMut()>);
     #[wasm_bindgen(js_name = many_arity_call2)]
-    fn many_arity_stack2(a: &Fn(u32));
+    fn many_arity_call_mut2(a: &Closure<dyn FnMut(u32)>);
     #[wasm_bindgen(js_name = many_arity_call3)]
-    fn many_arity_stack3(a: &Fn(u32, u32));
+    fn many_arity_call_mut3(a: &Closure<dyn FnMut(u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call4)]
-    fn many_arity_stack4(a: &Fn(u32, u32, u32));
+    fn many_arity_call_mut4(a: &Closure<dyn FnMut(u32, u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call5)]
-    fn many_arity_stack5(a: &Fn(u32, u32, u32, u32));
+    fn many_arity_call_mut5(a: &Closure<dyn FnMut(u32, u32, u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call6)]
-    fn many_arity_stack6(a: &Fn(u32, u32, u32, u32, u32));
+    fn many_arity_call_mut6(a: &Closure<dyn FnMut(u32, u32, u32, u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call7)]
-    fn many_arity_stack7(a: &Fn(u32, u32, u32, u32, u32, u32));
+    fn many_arity_call_mut7(a: &Closure<dyn FnMut(u32, u32, u32, u32, u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call8)]
-    fn many_arity_stack8(a: &Fn(u32, u32, u32, u32, u32, u32, u32));
+    fn many_arity_call_mut8(a: &Closure<dyn FnMut(u32, u32, u32, u32, u32, u32, u32)>);
     #[wasm_bindgen(js_name = many_arity_call9)]
-    fn many_arity_stack9(a: &Fn(u32, u32, u32, u32, u32, u32, u32, u32));
+    fn many_arity_call_mut9(a: &Closure<dyn FnMut(u32, u32, u32, u32, u32, u32, u32, u32)>);
 
-    fn long_lived_dropping_cache(a: &Closure<Fn()>);
+    fn option_call1(a: Option<&Closure<dyn Fn()>>);
+    fn option_call2(a: Option<&Closure<dyn FnMut(u32) -> u32>>) -> u32;
+    fn option_call3(a: Option<&Closure<dyn Fn()>>) -> bool;
+
+    #[wasm_bindgen(js_name = many_arity_call1)]
+    fn many_arity_stack1(a: &dyn Fn());
+    #[wasm_bindgen(js_name = many_arity_call2)]
+    fn many_arity_stack2(a: &dyn Fn(u32));
+    #[wasm_bindgen(js_name = many_arity_call3)]
+    fn many_arity_stack3(a: &dyn Fn(u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call4)]
+    fn many_arity_stack4(a: &dyn Fn(u32, u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call5)]
+    fn many_arity_stack5(a: &dyn Fn(u32, u32, u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call6)]
+    fn many_arity_stack6(a: &dyn Fn(u32, u32, u32, u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call7)]
+    fn many_arity_stack7(a: &dyn Fn(u32, u32, u32, u32, u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call8)]
+    fn many_arity_stack8(a: &dyn Fn(u32, u32, u32, u32, u32, u32, u32));
+    #[wasm_bindgen(js_name = many_arity_call9)]
+    fn many_arity_stack9(a: &dyn Fn(u32, u32, u32, u32, u32, u32, u32, u32));
+
+    fn long_lived_dropping_cache(a: &Closure<dyn Fn()>);
     #[wasm_bindgen(catch)]
     fn long_lived_dropping_call() -> Result<(), JsValue>;
 
-    fn long_fnmut_recursive_cache(a: &Closure<FnMut()>);
+    fn long_lived_option_dropping_cache(a: Option<&Closure<dyn Fn()>>) -> bool;
+    #[wasm_bindgen(catch)]
+    fn long_lived_option_dropping_call() -> Result<(), JsValue>;
+
+    fn long_fnmut_recursive_cache(a: &Closure<dyn FnMut()>);
     #[wasm_bindgen(catch)]
     fn long_fnmut_recursive_call() -> Result<(), JsValue>;
 
-    fn fnmut_call(a: &mut FnMut());
-    fn fnmut_thread(a: &mut FnMut(u32) -> u32) -> u32;
+    fn fnmut_call(a: &mut dyn FnMut());
+    fn fnmut_thread(a: &mut dyn FnMut(u32) -> u32) -> u32;
 
-    fn fnmut_bad_call(a: &mut FnMut());
+    fn fnmut_bad_call(a: &mut dyn FnMut());
     #[wasm_bindgen(catch)]
     fn fnmut_bad_again(a: bool) -> Result<(), JsValue>;
 
-    fn string_arguments_call(a: &mut FnMut(String));
+    fn string_arguments_call(a: &mut dyn FnMut(String));
 
-    fn string_ret_call(a: &mut FnMut(String) -> String);
+    fn string_ret_call(a: &mut dyn FnMut(String) -> String);
 
-    fn drop_during_call_save(a: &Closure<Fn()>);
+    fn drop_during_call_save(a: &Closure<dyn Fn()>);
     fn drop_during_call_call();
 
     fn js_test_closure_returner();
 
-    fn calling_it_throws(a: &Closure<FnMut()>) -> bool;
+    fn calling_it_throws(a: &Closure<dyn FnMut()>) -> bool;
 
     fn call_val(f: &JsValue);
 
@@ -98,19 +105,24 @@ extern "C" {
 
     fn pass_reference_first_arg_twice(
         a: RefFirstArgument,
-        b: &Closure<FnMut(&RefFirstArgument)>,
-        c: &Closure<FnMut(&RefFirstArgument)>,
+        b: &Closure<dyn FnMut(&RefFirstArgument)>,
+        c: &Closure<dyn FnMut(&RefFirstArgument)>,
     );
     #[wasm_bindgen(js_name = pass_reference_first_arg_twice)]
     fn pass_reference_first_arg_twice2(
         a: RefFirstArgument,
-        b: &mut FnMut(&RefFirstArgument),
-        c: &mut FnMut(&RefFirstArgument),
+        b: &mut dyn FnMut(&RefFirstArgument),
+        c: &mut dyn FnMut(&RefFirstArgument),
     );
     fn call_destroyed(a: &JsValue);
 
-    fn js_store_forgotten_closure(closure: &Closure<Fn()>);
+    fn js_store_forgotten_closure(closure: &Closure<dyn Fn()>);
     fn js_call_forgotten_closure();
+
+    #[wasm_bindgen(js_name = many_arity_call2)]
+    fn externref_call(a: &Closure<dyn Fn(JsValue)>);
+    #[wasm_bindgen(js_name = many_arity_call2)]
+    fn named_externref_call(a: &Closure<dyn Fn(Number)>);
 }
 
 #[wasm_bindgen_test]
@@ -130,7 +142,7 @@ fn cannot_reuse() {
 
 #[wasm_bindgen_test]
 fn debug() {
-    let closure = Closure::wrap(Box::new(|| {}) as Box<FnMut()>);
+    let closure = Closure::wrap(Box::new(|| {}) as Box<dyn FnMut()>);
     assert_eq!(&format!("{:?}", closure), "Closure { ... }");
 }
 
@@ -235,6 +247,29 @@ fn many_arity() {
     );
 }
 
+#[wasm_bindgen_test]
+fn option() {
+    let hit = Rc::new(Cell::new(false));
+    let hit2 = hit.clone();
+    let a = Closure::new(move || hit2.set(true));
+    assert!(!hit.get());
+    option_call1(Some(&a));
+    assert!(hit.get());
+
+    let hit = Rc::new(Cell::new(false));
+    {
+        let hit = hit.clone();
+        let a = Closure::new(move |x| {
+            hit.set(true);
+            x + 3
+        });
+        assert_eq!(option_call2(Some(&a)), 5);
+    }
+    assert!(hit.get());
+
+    assert!(option_call3(None));
+}
+
 struct Dropper(Rc<Cell<bool>>);
 impl Drop for Dropper {
     fn drop(&mut self) {
@@ -298,6 +333,24 @@ fn long_lived_dropping() {
     assert!(hit.get());
     drop(a);
     assert!(long_lived_dropping_call().is_err());
+}
+
+#[wasm_bindgen_test]
+fn long_lived_option_dropping() {
+    let hit = Rc::new(Cell::new(false));
+    let hit2 = hit.clone();
+
+    let a = Closure::new(move || hit2.set(true));
+
+    assert!(!long_lived_option_dropping_cache(None));
+    assert!(long_lived_option_dropping_cache(Some(&a)));
+
+    assert!(!hit.get());
+    assert!(long_lived_option_dropping_call().is_ok());
+    assert!(hit.get());
+
+    drop(a);
+    assert!(long_lived_option_dropping_call().is_err());
 }
 
 #[wasm_bindgen_test]
@@ -379,7 +432,9 @@ fn drop_drops() {
         }
     }
     let a = A;
-    let x: Closure<Fn()> = Closure::new(move || drop(&a));
+    let x: Closure<dyn Fn()> = Closure::new(move || {
+        let _ = a;
+    });
     drop(x);
     unsafe {
         assert!(HIT);
@@ -402,7 +457,7 @@ fn drop_during_call_ok() {
     let rc2 = rc.clone();
     let x = 3;
     let a = A;
-    let x: Closure<Fn()> = Closure::new(move || {
+    let x: Closure<dyn Fn()> = Closure::new(move || {
         // "drop ourselves"
         drop(rc2.borrow_mut().take().unwrap());
 
@@ -418,7 +473,7 @@ fn drop_during_call_ok() {
         assert_eq!(x, 3);
 
         // make sure `A` is bound to our closure environment.
-        drop(&a);
+        let _a = &a;
         unsafe {
             assert!(!HIT);
         }
@@ -437,10 +492,9 @@ fn drop_during_call_ok() {
 
 #[wasm_bindgen_test]
 fn test_closure_returner() {
-    type ClosureType = FnMut() -> BadStruct;
+    type ClosureType = dyn FnMut() -> BadStruct;
 
     use js_sys::{Object, Reflect};
-    use wasm_bindgen::JsCast;
 
     js_test_closure_returner();
 
@@ -458,7 +512,7 @@ fn test_closure_returner() {
         Reflect::set(
             &o,
             &JsValue::from("someKey"),
-            &some_fn.as_ref().unchecked_ref(),
+            some_fn.as_ref().unchecked_ref(),
         )
         .unwrap();
         Reflect::set(
@@ -481,22 +535,22 @@ pub struct RefFirstArgument {
 fn reference_as_first_argument_builds_at_all() {
     #[wasm_bindgen]
     extern "C" {
-        fn ref_first_arg1(a: &Fn(&JsValue));
-        fn ref_first_arg2(a: &mut FnMut(&JsValue));
-        fn ref_first_arg3(a: &Closure<Fn(&JsValue)>);
-        fn ref_first_arg4(a: &Closure<FnMut(&JsValue)>);
-        fn ref_first_custom1(a: &Fn(&RefFirstArgument));
-        fn ref_first_custom2(a: &mut FnMut(&RefFirstArgument));
-        fn ref_first_custom3(a: &Closure<Fn(&RefFirstArgument)>);
-        fn ref_first_custom4(a: &Closure<FnMut(&RefFirstArgument)>);
+        fn ref_first_arg1(a: &dyn Fn(&JsValue));
+        fn ref_first_arg2(a: &mut dyn FnMut(&JsValue));
+        fn ref_first_arg3(a: &Closure<dyn Fn(&JsValue)>);
+        fn ref_first_arg4(a: &Closure<dyn FnMut(&JsValue)>);
+        fn ref_first_custom1(a: &dyn Fn(&RefFirstArgument));
+        fn ref_first_custom2(a: &mut dyn FnMut(&RefFirstArgument));
+        fn ref_first_custom3(a: &Closure<dyn Fn(&RefFirstArgument)>);
+        fn ref_first_custom4(a: &Closure<dyn FnMut(&RefFirstArgument)>);
     }
 
-    Closure::wrap(Box::new(|_: &JsValue| ()) as Box<Fn(&JsValue)>);
-    Closure::wrap(Box::new(|_: &JsValue| ()) as Box<FnMut(&JsValue)>);
+    Closure::wrap(Box::new(|_: &JsValue| ()) as Box<dyn Fn(&JsValue)>);
+    Closure::wrap(Box::new(|_: &JsValue| ()) as Box<dyn FnMut(&JsValue)>);
     Closure::once(|_: &JsValue| ());
     Closure::once_into_js(|_: &JsValue| ());
-    Closure::wrap(Box::new(|_: &RefFirstArgument| ()) as Box<Fn(&RefFirstArgument)>);
-    Closure::wrap(Box::new(|_: &RefFirstArgument| ()) as Box<FnMut(&RefFirstArgument)>);
+    Closure::wrap(Box::new(|_: &RefFirstArgument| ()) as Box<dyn Fn(&RefFirstArgument)>);
+    Closure::wrap(Box::new(|_: &RefFirstArgument| ()) as Box<dyn FnMut(&RefFirstArgument)>);
     Closure::once(|_: &RefFirstArgument| ());
     Closure::once_into_js(|_: &RefFirstArgument| ());
 }
@@ -553,25 +607,33 @@ fn call_destroyed_doesnt_segfault() {
     }
 
     let a = A(1, 1);
-    let a = Closure::wrap(Box::new(move || drop(&a)) as Box<Fn()>);
+    let a = Closure::wrap(Box::new(move || {
+        let _ = a;
+    }) as Box<dyn Fn()>);
     let b = a.as_ref().clone();
     drop(a);
     call_destroyed(&b);
 
     let a = A(2, 2);
-    let a = Closure::wrap(Box::new(move || drop(&a)) as Box<FnMut()>);
+    let a = Closure::wrap(Box::new(move || {
+        let _ = a;
+    }) as Box<dyn FnMut()>);
     let b = a.as_ref().clone();
     drop(a);
     call_destroyed(&b);
 
     let a = A(1, 1);
-    let a = Closure::wrap(Box::new(move |_: &JsValue| drop(&a)) as Box<Fn(&JsValue)>);
+    let a = Closure::wrap(Box::new(move |_: &JsValue| {
+        let _ = a;
+    }) as Box<dyn Fn(&JsValue)>);
     let b = a.as_ref().clone();
     drop(a);
     call_destroyed(&b);
 
     let a = A(2, 2);
-    let a = Closure::wrap(Box::new(move |_: &JsValue| drop(&a)) as Box<FnMut(&JsValue)>);
+    let a = Closure::wrap(Box::new(move |_: &JsValue| {
+        let _ = a;
+    }) as Box<dyn FnMut(&JsValue)>);
     let b = a.as_ref().clone();
     drop(a);
     call_destroyed(&b);
@@ -579,8 +641,14 @@ fn call_destroyed_doesnt_segfault() {
 
 #[wasm_bindgen_test]
 fn forget_works() {
-    let a = Closure::wrap(Box::new(|| {}) as Box<Fn()>);
+    let a = Closure::wrap(Box::new(|| {}) as Box<dyn Fn()>);
     js_store_forgotten_closure(&a);
     a.forget();
     js_call_forgotten_closure();
+}
+
+#[wasm_bindgen_test]
+fn named_externref_no_duplicate_adapter() {
+    externref_call(&Closure::new(|a| assert_eq!(a, 1)));
+    named_externref_call(&Closure::new(|a| assert_eq!(a, 1)));
 }

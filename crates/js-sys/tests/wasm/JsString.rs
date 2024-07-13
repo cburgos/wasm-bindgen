@@ -1,7 +1,5 @@
 use js_sys::*;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::JsValue;
 use wasm_bindgen_test::*;
 
 #[wasm_bindgen(module = "tests/wasm/JsString.js")]
@@ -179,70 +177,6 @@ fn last_index_of() {
 }
 
 #[wasm_bindgen_test]
-fn locale_compare() {
-    let a = "résumé";
-    let b = "RESUME";
-    let js_a = JsString::from(a);
-    let js_b = JsString::from(b);
-    let locales = Array::new();
-    let options = Object::new();
-
-    assert_eq!(js_a.locale_compare(a, &locales, &options), 0);
-    assert_eq!(js_b.locale_compare(b, &locales, &options), 0);
-    assert!(js_a.locale_compare(b, &locales, &options) > 0);
-    assert!(js_b.locale_compare(a, &locales, &options) < 0);
-
-    locales.push(&"en".into());
-    Reflect::set(options.as_ref(), &"sensitivity".into(), &"base".into()).unwrap();
-
-    assert_eq!(js_a.locale_compare(a, &locales, &options), 0);
-    assert_eq!(js_a.locale_compare(b, &locales, &options), 0);
-    assert_eq!(js_b.locale_compare(a, &locales, &options), 0);
-    assert_eq!(js_b.locale_compare(b, &locales, &options), 0);
-
-    let a = "ä";
-    let z = "z";
-    let js_a = JsString::from(a);
-    let js_z = JsString::from(z);
-    let locales_de = Array::of1(&"de".into());
-    let locales_sv = Array::of1(&"sv".into());
-    let options = Object::new();
-
-    assert_eq!(js_a.locale_compare(a, &locales_de, &options), 0);
-    assert_eq!(js_z.locale_compare(z, &locales_de, &options), 0);
-    assert!(js_a.locale_compare(z, &locales_de, &options) < 0);
-    assert!(js_z.locale_compare(a, &locales_de, &options) > 0);
-
-    assert_eq!(js_a.locale_compare(a, &locales_sv, &options), 0);
-    assert_eq!(js_z.locale_compare(z, &locales_sv, &options), 0);
-    assert!(js_a.locale_compare(z, &locales_sv, &options) < 0);
-    assert!(js_z.locale_compare(a, &locales_sv, &options) > 0);
-
-    let two = "2";
-    let ten = "10";
-    let js_two = JsString::from(two);
-    let js_ten = JsString::from(ten);
-    let locales = Array::new();
-    let options = Object::new();
-
-    assert_eq!(js_two.locale_compare(two, &locales, &options), 0);
-    assert_eq!(js_ten.locale_compare(ten, &locales, &options), 0);
-    assert!(js_two.locale_compare(ten, &locales, &options) > 0);
-    assert!(js_ten.locale_compare(two, &locales, &options) < 0);
-
-    locales.push(&"en-u-kn-true".into());
-
-    assert!(js_two.locale_compare(ten, &locales, &options) < 0);
-    assert!(js_ten.locale_compare(two, &locales, &options) > 0);
-
-    let locales = Array::new();
-    Reflect::set(options.as_ref(), &"numeric".into(), &JsValue::TRUE).unwrap();
-
-    assert!(js_two.locale_compare(ten, &locales, &options) < 0);
-    assert!(js_ten.locale_compare(two, &locales, &options) > 0);
-}
-
-#[wasm_bindgen_test]
 fn match_() {
     let s = "The quick brown fox jumped over the lazy dog. It barked.";
     let re = RegExp::new("[A-Z]", "g");
@@ -251,6 +185,13 @@ fn match_() {
 
     assert_eq!(Reflect::get(obj.as_ref(), &"0".into()).unwrap(), "T");
     assert_eq!(Reflect::get(obj.as_ref(), &"1".into()).unwrap(), "I");
+
+    let re = RegExp::new("[A-Z]([a-z]*)", "g");
+    let result = JsString::from(s).match_(&re);
+    let obj = result.unwrap();
+
+    assert_eq!(Reflect::get(obj.as_ref(), &"0".into()).unwrap(), "The");
+    assert_eq!(Reflect::get(obj.as_ref(), &"1".into()).unwrap(), "It");
 
     let result = JsString::from("foo").match_(&re);
     assert!(result.is_none());
@@ -270,6 +211,66 @@ fn match_() {
     );
     assert_eq!(Reflect::get(obj.as_ref(), &"2".into()).unwrap(), ".1");
     assert_eq!(Reflect::get(obj.as_ref(), &"index".into()).unwrap(), 22);
+    assert_eq!(Reflect::get(obj.as_ref(), &"input".into()).unwrap(), s);
+}
+
+#[wasm_bindgen_test]
+fn match_all() {
+    let s = "The quick brown fox jumped over the lazy dog. It barked.";
+    let re = RegExp::new("[A-Z]([a-z]*)", "g");
+    let result: Vec<_> = JsString::from(s)
+        .match_all(&re)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    let obj = &result[0];
+    assert_eq!(Reflect::get(obj.as_ref(), &"0".into()).unwrap(), "The");
+    assert_eq!(Reflect::get(obj.as_ref(), &"1".into()).unwrap(), "he");
+
+    let obj = &result[1];
+    assert_eq!(Reflect::get(obj.as_ref(), &"0".into()).unwrap(), "It");
+    assert_eq!(Reflect::get(obj.as_ref(), &"1".into()).unwrap(), "t");
+
+    let result: Vec<_> = JsString::from("foo")
+        .match_all(&re)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(result.len(), 0);
+
+    let s = "For more information, see Chapter 3.4.5.1. Also see Chapter 3.1.4";
+    let re = RegExp::new("see (chapter \\d+(\\.\\d)*)", "gi");
+    let result: Vec<_> = JsString::from(s)
+        .match_all(&re)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    let obj = &result[0];
+    assert_eq!(
+        Reflect::get(obj.as_ref(), &"0".into()).unwrap(),
+        "see Chapter 3.4.5.1"
+    );
+    assert_eq!(
+        Reflect::get(obj.as_ref(), &"1".into()).unwrap(),
+        "Chapter 3.4.5.1"
+    );
+    assert_eq!(Reflect::get(obj.as_ref(), &"2".into()).unwrap(), ".1");
+    assert_eq!(Reflect::get(obj.as_ref(), &"index".into()).unwrap(), 22);
+    assert_eq!(Reflect::get(obj.as_ref(), &"input".into()).unwrap(), s);
+
+    let obj = &result[1];
+    assert_eq!(
+        Reflect::get(obj.as_ref(), &"0".into()).unwrap(),
+        "see Chapter 3.1.4"
+    );
+    assert_eq!(
+        Reflect::get(obj.as_ref(), &"1".into()).unwrap(),
+        "Chapter 3.1.4"
+    );
+    assert_eq!(Reflect::get(obj.as_ref(), &"2".into()).unwrap(), ".4");
+    assert_eq!(Reflect::get(obj.as_ref(), &"index".into()).unwrap(), 48);
     assert_eq!(Reflect::get(obj.as_ref(), &"input".into()).unwrap(), s);
 }
 
@@ -352,6 +353,38 @@ fn replace() {
     let result = js.replace_by_pattern_with_function(&re, &get_replacer_function());
 
     assert_eq!(result, "border-top");
+}
+
+#[wasm_bindgen_test]
+fn replace_all() {
+    let js = JsString::from(
+        "The quick brown fox jumped over the lazy dog. If the dog reacted, was it really lazy?",
+    );
+    let result = js.replace_all("dog", "ferret");
+
+    assert_eq!(
+        result,
+        "The quick brown fox jumped over the lazy ferret. If the ferret reacted, was it really lazy?"
+    );
+
+    let js = JsString::from("borderTopTest");
+    let result = js.replace_all_with_function("T", &get_replacer_function());
+
+    assert_eq!(result, "border-top-test");
+
+    let js = JsString::from(
+        "The quick brown fox jumped over the lazy dog. If the dog reacted, was it really lazy?",
+    );
+    let re = RegExp::new("dog", "g");
+    let result = js.replace_all_by_pattern(&re, "ferret");
+
+    assert_eq!(result, "The quick brown fox jumped over the lazy ferret. If the ferret reacted, was it really lazy?");
+
+    let js = JsString::from("borderTopTest");
+    let re = RegExp::new("[A-Z]", "g");
+    let result = js.replace_all_by_pattern_with_function(&re, &get_replacer_function());
+
+    assert_eq!(result, "border-top-test");
 }
 
 #[wasm_bindgen_test]

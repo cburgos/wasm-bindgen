@@ -7,24 +7,42 @@
   </p>
 
   <p>
-    <a href="https://dev.azure.com/rustwasm/wasm-bindgen/_build/latest?definitionId=1&branchName=master"><img src="https://img.shields.io/azure-devops/build/rustwasm/wasm-bindgen/1.svg?style=flat-square" alt="Build Status" /></a>
+    <a href="https://github.com/rustwasm/wasm-bindgen/actions/workflows/main.yml?query=branch%3Amain"><img src="https://github.com/rustwasm/wasm-bindgen/actions/workflows/main.yml/badge.svg?branch=main" alt="Build Status" /></a>
     <a href="https://crates.io/crates/wasm-bindgen"><img src="https://img.shields.io/crates/v/wasm-bindgen.svg?style=flat-square" alt="Crates.io version" /></a>
     <a href="https://crates.io/crates/wasm-bindgen"><img src="https://img.shields.io/crates/d/wasm-bindgen.svg?style=flat-square" alt="Download" /></a>
     <a href="https://docs.rs/wasm-bindgen"><img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square" alt="docs.rs docs" /></a>
   </p>
 
   <h3>
-    <a href="https://rustwasm.github.io/docs/wasm-bindgen/">Guide</a>
+    <a href="https://rustwasm.github.io/wasm-bindgen/">Guide (main branch)</a>
     <span> | </span>
     <a href="https://docs.rs/wasm-bindgen">API Docs</a>
     <span> | </span>
     <a href="https://github.com/rustwasm/wasm-bindgen/blob/master/CONTRIBUTING.md">Contributing</a>
     <span> | </span>
-    <a href="https://discordapp.com/channels/442252698964721669/443151097398296587">Chat</a>
+    <a href="https://discord.gg/xMZ7CCY">Chat</a>
   </h3>
 
   <sub>Built with 🦀🕸 by <a href="https://rustwasm.github.io/">The Rust and WebAssembly Working Group</a></sub>
 </div>
+
+## Install `wasm-bindgen-cli`
+
+You can install it using `cargo install`:
+
+```
+cargo install wasm-bindgen-cli
+```
+
+Or, you can download it from the
+[release page](https://github.com/rustwasm/wasm-bindgen/releases).
+
+If you have [`cargo-binstall`](https://crates.io/crates/cargo-binstall) installed,
+then you can install the pre-built artifacts by running:
+
+```
+cargo binstall wasm-bindgen-cli
+```
 
 ## Example
 
@@ -74,7 +92,7 @@ greet("World!");
   unnecessary, promising to unlock even-faster-than-JavaScript DOM access.
 
 [wasm-es-modules]: https://github.com/WebAssembly/esm-integration
-[webidl-bindings]: https://github.com/WebAssembly/webidl-bindings/blob/master/proposals/webidl-bindings/Explainer.md
+[webidl-bindings]: https://github.com/WebAssembly/proposals/issues/8
 
 ## Guide
 
@@ -110,4 +128,4 @@ Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
 
-[contributing]: https://rustwasm.github.io/wasm-bindgen/contributing/index.html
+[contributing]: https://rustwasm.github.io/docs/wasm-bindgen/contributing/index.html

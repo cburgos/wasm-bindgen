@@ -43,6 +43,10 @@ exports.js_exceptions = () => {
     let b = wasm.ClassesExceptions1.new();
     b.foo(b);
     assert.throws(() => b.bar(b), /recursive use of an object/);
+    // TODO: throws because it tries to borrow_mut, but the throw_str from the previous line doesn't clean up the
+    // RefMut so the object is left in a broken state.
+    // We still try to call free here so the object is removed from the FinalizationRegistry when weak refs are enabled.
+    assert.throws(() => b.free(), /attempted to take ownership/);
 
     let c = wasm.ClassesExceptions1.new();
     let d = wasm.ClassesExceptions2.new();
@@ -112,6 +116,18 @@ exports.js_public_fields = () => {
     assert.strictEqual(a.skipped, undefined);
 };
 
+exports.js_getter_with_clone = () => {
+    const a = wasm.GetterWithCloneStruct.new();
+    assert.strictEqual(a.a, '');
+    a.a = 'foo';
+    assert.strictEqual(a.a, 'foo');
+
+    const b = wasm.GetterWithCloneStructField.new();
+    assert.strictEqual(b.a, '');
+    b.a = 'foo';
+    assert.strictEqual(b.a, 'foo');
+};
+
 exports.js_using_self = () => {
     wasm.UseSelf.new().free();
 };
@@ -147,6 +163,13 @@ exports.js_renamed_export = () => {
     x.bar(x);
 };
 
+exports.js_renamed_field = () => {
+    const x = new wasm.RenamedField();
+    assert.ok(x.bar === 3);
+
+    x.foo();
+}
+
 exports.js_conditional_bindings = () => {
     const x = new wasm.ConditionalBindings();
     x.free();
@@ -169,4 +192,59 @@ exports.js_test_option_classes = () => {
   const c = wasm.option_class_some();
   assert.ok(c instanceof wasm.OptionClass);
   wasm.option_class_assert_some(c);
+};
+
+/**
+ * Invokes `console.log`, but logs to a string rather than stdout
+ * @param {any} data Data to pass to `console.log`
+ * @returns {string} Output from `console.log`, without color or trailing newlines
+ */
+const console_log_to_string = data => {
+    // Store the original stdout.write and create a console that logs without color
+    const original_write = process.stdout.write;
+    const colorless_console = new console.Console({
+      stdout: process.stdout,
+      colorMode: false
+    });
+    let output = '';
+
+    // Change stdout.write to append to our string, then restore the original function
+    process.stdout.write = chunk => output += chunk.trim();
+    colorless_console.log(data);
+    process.stdout.write = original_write;
+
+    return output;
+};
+
+exports.js_test_inspectable_classes = () => {
+    const inspectable = wasm.Inspectable.new();
+    const not_inspectable = wasm.NotInspectable.new();
+    // Inspectable classes have a toJSON and toString implementation generated
+    assert.deepStrictEqual(inspectable.toJSON(), { a: inspectable.a });
+    assert.strictEqual(inspectable.toString(), `{"a":${inspectable.a}}`);
+    // Inspectable classes in Node.js have improved console.log formatting as well
+    assert(console_log_to_string(inspectable).endsWith(`{ a: ${inspectable.a} }`));
+    // Non-inspectable classes do not have a toJSON or toString generated
+    assert.strictEqual(not_inspectable.toJSON, undefined);
+    assert.strictEqual(not_inspectable.toString(), '[object Object]');
+    // Non-inspectable classes in Node.js have no special console.log formatting
+    assert.strictEqual(console_log_to_string(not_inspectable), `NotInspectable { __wbg_ptr: ${not_inspectable.__wbg_ptr} }`);
+    inspectable.free();
+    not_inspectable.free();
+};
+
+exports.js_test_inspectable_classes_can_override_generated_methods = () => {
+    const overridden_inspectable = wasm.OverriddenInspectable.new();
+    // Inspectable classes can have the generated toJSON and toString overwritten
+    assert.strictEqual(overridden_inspectable.a, 0);
+    assert.deepStrictEqual(overridden_inspectable.toJSON(), 'JSON was overwritten');
+    assert.strictEqual(overridden_inspectable.toString(), 'string was overwritten');
+    overridden_inspectable.free();
+};
+
+exports.js_test_class_defined_in_macro = () => {
+    const macroClass = new wasm.InsideMacro();
+    assert.strictEqual(macroClass.a, 3);
+    macroClass.a = 5;
+    assert.strictEqual(macroClass.a, 5);
 };

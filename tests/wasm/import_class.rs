@@ -1,6 +1,7 @@
 //! dox
 
 #![deny(missing_docs)] // test that documenting public bindings is enough
+#![allow(clippy::redundant_clone)] // test specifically with cloned objects
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
@@ -22,6 +23,19 @@ extern "C" {
     fn append_to_internal_string(this: &Construct, s: &str);
     #[wasm_bindgen(method)]
     fn assert_internal_string(this: &Construct, s: &str);
+
+    #[wasm_bindgen(method, js_name = "kebab-case")]
+    fn kebab_case(this: &Construct) -> u32;
+    #[wasm_bindgen(method, getter, js_name = "kebab-case-val")]
+    fn kebab_case_val(this: &Construct) -> u32;
+    #[wasm_bindgen(method, setter, js_name = "kebab-case-val")]
+    fn set_kebab_case_val(this: &Construct, val: u32);
+    #[wasm_bindgen(static_method_of = Construct, js_name = "static-kebab-case")]
+    fn static_kebab_case() -> u32;
+    #[wasm_bindgen(static_method_of = Construct, getter, js_name = "static-kebab-case-val")]
+    fn static_kebab_case_val() -> u32;
+    #[wasm_bindgen(static_method_of = Construct, setter, js_name = "static-kebab-case-val")]
+    fn set_static_kebab_case_val(val: u32);
 
     type NewConstructors;
     #[wasm_bindgen(constructor)]
@@ -96,13 +110,26 @@ extern "C" {
     type StaticStructural;
     #[wasm_bindgen(static_method_of = StaticStructural, structural)]
     fn static_structural(a: u32) -> u32;
+
+    #[derive(Clone)]
+    type InnerClass;
+    #[wasm_bindgen(js_namespace = ["nestedNamespace", "InnerClass"])]
+    fn inner_static_function(a: u32) -> u32;
+    #[wasm_bindgen(js_namespace = ["nestedNamespace", "InnerClass"])]
+    fn create_inner_instance() -> InnerClass;
+    #[wasm_bindgen(method)]
+    fn get_internal_int(this: &InnerClass) -> u32;
+    #[wasm_bindgen(method)]
+    fn append_to_internal_int(this: &InnerClass, i: u32);
+    #[wasm_bindgen(method)]
+    fn assert_internal_int(this: &InnerClass, i: u32);
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_namespace = Math)]
 extern "C" {
-    #[wasm_bindgen(js_namespace = Math)]
+    #[wasm_bindgen]
     fn random() -> f64;
-    #[wasm_bindgen(js_namespace = Math)]
+    #[wasm_bindgen]
     fn log(a: f64) -> f64;
 }
 
@@ -124,6 +151,14 @@ fn construct() {
     assert_eq!(f.clone().get_internal_string(), "this");
     f.append_to_internal_string(" foo");
     f.assert_internal_string("this foo");
+
+    assert_eq!(f.kebab_case(), 42);
+    f.set_kebab_case_val(0);
+    // our setter does nothing so this is 42 anyway
+    assert_eq!(f.kebab_case_val(), 42);
+    assert_eq!(Construct::static_kebab_case(), 42);
+    Construct::set_static_kebab_case_val(0);
+    assert_eq!(Construct::static_kebab_case_val(), 42);
 }
 
 #[wasm_bindgen_test]
@@ -139,7 +174,6 @@ fn rename_type() {
 }
 
 #[wasm_bindgen_test]
-#[cfg(ignored)] // TODO: fix this before landing
 fn switch_methods() {
     assert!(!switch_methods_called());
     SwitchMethods::a();
@@ -236,4 +270,15 @@ fn catch_constructors() {
 #[wasm_bindgen_test]
 fn static_structural() {
     assert_eq!(StaticStructural::static_structural(30), 33);
+}
+
+#[wasm_bindgen_test]
+fn nested_namespace() {
+    assert_eq!(InnerClass::inner_static_function(15), 20);
+
+    let f = InnerClass::create_inner_instance();
+    assert_eq!(f.get_internal_int(), 3);
+    assert_eq!(f.clone().get_internal_int(), 3);
+    f.append_to_internal_int(5);
+    f.assert_internal_int(8);
 }
