@@ -18,6 +18,9 @@ extern "C" {
     #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/autofocus)"]
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    #[deprecated(
+        note = "Use `HtmlElement::autofocus()` or `HtmlElement::set_autofocus()` instead."
+    )]
     pub fn autofocus(this: &HtmlButtonElement) -> bool;
     # [wasm_bindgen (structural , method , setter , js_class = "HTMLButtonElement" , js_name = autofocus)]
     #[doc = "Setter for the `autofocus` field of this object."]
@@ -25,6 +28,9 @@ extern "C" {
     #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/autofocus)"]
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    #[deprecated(
+        note = "Use `HtmlElement::autofocus()` or `HtmlElement::set_autofocus()` instead."
+    )]
     pub fn set_autofocus(this: &HtmlButtonElement, value: bool);
     # [wasm_bindgen (structural , method , getter , js_class = "HTMLButtonElement" , js_name = disabled)]
     #[doc = "Getter for the `disabled` field of this object."]
@@ -190,6 +196,34 @@ extern "C" {
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`, `NodeList`*"]
     pub fn labels(this: &HtmlButtonElement) -> NodeList;
+    # [wasm_bindgen (structural , method , getter , js_class = "HTMLButtonElement" , js_name = popoverTargetElement)]
+    #[doc = "Getter for the `popoverTargetElement` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/popoverTargetElement)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    pub fn popover_target_element(this: &HtmlButtonElement) -> Option<Element>;
+    # [wasm_bindgen (structural , method , setter , js_class = "HTMLButtonElement" , js_name = popoverTargetElement)]
+    #[doc = "Setter for the `popoverTargetElement` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/popoverTargetElement)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    pub fn set_popover_target_element(this: &HtmlButtonElement, value: Option<&Element>);
+    # [wasm_bindgen (structural , method , getter , js_class = "HTMLButtonElement" , js_name = popoverTargetAction)]
+    #[doc = "Getter for the `popoverTargetAction` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/popoverTargetAction)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    pub fn popover_target_action(this: &HtmlButtonElement) -> String;
+    # [wasm_bindgen (structural , method , setter , js_class = "HTMLButtonElement" , js_name = popoverTargetAction)]
+    #[doc = "Setter for the `popoverTargetAction` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLButtonElement/popoverTargetAction)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlButtonElement`*"]
+    pub fn set_popover_target_action(this: &HtmlButtonElement, value: &str);
     # [wasm_bindgen (method , structural , js_class = "HTMLButtonElement" , js_name = checkValidity)]
     #[doc = "The `checkValidity()` method."]
     #[doc = ""]

@@ -1,13 +1,34 @@
-//! A test suite to check the reference JS and wasm output of the `wasm-bindgen`
+//! A test suite to check the reference JS and Wasm output of the `wasm-bindgen`
 //! library.
 //!
 //! This is intended as an end-to-end integration test where we can track
-//! changes to the JS and wasm output.
+//! changes to the JS and Wasm output.
 //!
 //! Tests are located in `reference/*.rs` files and are accompanied with sibling
 //! `*.js` files and `*.wat` files with the expected output of the `*.rs`
 //! compilation. Use `BLESS=1` in the environment to automatically update all
 //! tests.
+//!
+//! ## Dependencies
+//!
+//! By default, tests only have access to the `wasm-bindgen` and
+//! `wasm-bindgen-futures` crates. Additional crates can be used by declaring
+//! them as dependencies using a comment at the top of the test file.
+//! For example:
+//!
+//! ```rust
+//! // DEPENDENCY: web-sys = { path = '{root}/crates/web-sys', features = ['console', 'Url', 'MediaSourceReadyState'] }
+//! ```
+//!
+//! This will add the `web-sys` crate as a dependency to the test, allowing the
+//! test to use the `console`, `Url`, and `MediaSourceReadyState` features, as
+//! well as the `web-sys` crate itself.
+//!
+//! Note that the `{root}` placeholder will be replaced with the path to the
+//! root of the `wasm-bindgen` repository.
+//!
+//! Multiple dependencies can be declared in a single test file using multiple
+//! `DEPENDENCY:` comments.
 
 use anyhow::{bail, Result};
 use assert_cmd::prelude::*;
@@ -55,6 +76,15 @@ fn main() -> Result<()> {
 fn runtest(test: &Path) -> Result<()> {
     let contents = fs::read_to_string(test)?;
     let td = tempfile::TempDir::new()?;
+    let root = repo_root();
+    let root = root.display();
+
+    // parse additional dependency declarations
+    let dependencies = contents
+        .lines()
+        .filter_map(|l| l.strip_prefix("// DEPENDENCY: "))
+        .map(|l| "\n            ".to_string() + &l.trim().replace("{root}", &root.to_string()))
+        .fold(String::new(), |a, b| a + &b);
 
     let manifest = format!(
         "
@@ -62,19 +92,18 @@ fn runtest(test: &Path) -> Result<()> {
             name = \"reference-test\"
             authors = []
             version = \"1.0.0\"
-            edition = '2018'
+            edition = '2021'
 
             [dependencies]
-            wasm-bindgen = {{ path = '{}' }}
-            wasm-bindgen-futures = {{ path = '{}/crates/futures' }}
+            wasm-bindgen = {{ path = '{root}' }}
+            wasm-bindgen-futures = {{ path = '{root}/crates/futures' }}
+            {dependencies}
 
             [lib]
             crate-type = ['cdylib']
-            path = '{}'
+            path = '{test}'
         ",
-        repo_root().display(),
-        repo_root().display(),
-        test.display(),
+        test = test.display(),
     );
 
     fs::write(td.path().join("Cargo.toml"), manifest)?;
@@ -127,7 +156,7 @@ fn assert_same(output: &str, expected: &Path) -> Result<()> {
 }
 
 fn sanitize_wasm(wasm: &Path) -> Result<String> {
-    // Clean up the wasm module by removing all function
+    // Clean up the Wasm module by removing all function
     // implementations/instructions, data sections, etc. This'll help us largely
     // only deal with exports/imports which is all we're really interested in.
     let mut module = ModuleConfig::new()

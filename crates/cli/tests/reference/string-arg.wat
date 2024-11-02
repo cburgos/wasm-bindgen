@@ -10,4 +10,6 @@
   (export "foo" (func $foo))
   (export "__wbindgen_malloc" (func $__wbindgen_malloc))
   (export "__wbindgen_realloc" (func $__wbindgen_realloc))
+  (@custom "target_features" (after code) "\04+\0amultivalue+\0fmutable-globals+\0freference-types+\08sign-ext")
 )
+

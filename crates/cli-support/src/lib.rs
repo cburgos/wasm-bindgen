@@ -35,13 +35,14 @@ pub struct Bindgen {
     remove_producers_section: bool,
     omit_default_module_path: bool,
     emit_start: bool,
-    // Support for the wasm threads proposal, transforms the wasm module to be
+    // Support for the Wasm threads proposal, transforms the Wasm module to be
     // "ready to be instantiated on any thread"
     threads: wasm_bindgen_threads_xform::Config,
     externref: bool,
     multi_value: bool,
     encode_into: EncodeInto,
     split_linked_modules: bool,
+    symbol_dispose: bool,
 }
 
 pub struct Output {
@@ -66,7 +67,7 @@ enum OutputMode {
     Bundler { browser_only: bool },
     Web,
     NoModules { global: String },
-    Node { experimental_modules: bool },
+    Node { module: bool },
     Deno,
 }
 
@@ -88,6 +89,7 @@ impl Bindgen {
         let externref =
             env::var("WASM_BINDGEN_ANYREF").is_ok() || env::var("WASM_BINDGEN_EXTERNREF").is_ok();
         let multi_value = env::var("WASM_BINDGEN_MULTI_VALUE").is_ok();
+        let symbol_dispose = env::var("WASM_BINDGEN_EXPERIMENTAL_SYMBOL_DISPOSE").is_ok();
         Bindgen {
             input: Input::None,
             out_name: None,
@@ -109,6 +111,7 @@ impl Bindgen {
             encode_into: EncodeInto::Test,
             omit_default_module_path: true,
             split_linked_modules: false,
+            symbol_dispose,
         }
     }
 
@@ -122,6 +125,7 @@ impl Bindgen {
         self
     }
 
+    #[deprecated = "automatically detected via `-Ctarget-feature=+reference-types`"]
     pub fn reference_types(&mut self, enable: bool) -> &mut Bindgen {
         self.externref = enable;
         self
@@ -154,23 +158,16 @@ impl Bindgen {
 
     pub fn nodejs(&mut self, node: bool) -> Result<&mut Bindgen, Error> {
         if node {
-            self.switch_mode(
-                OutputMode::Node {
-                    experimental_modules: false,
-                },
-                "--target nodejs",
-            )?;
+            self.switch_mode(OutputMode::Node { module: false }, "--target nodejs")?;
         }
         Ok(self)
     }
 
-    pub fn nodejs_experimental_modules(&mut self, node: bool) -> Result<&mut Bindgen, Error> {
+    pub fn nodejs_module(&mut self, node: bool) -> Result<&mut Bindgen, Error> {
         if node {
             self.switch_mode(
-                OutputMode::Node {
-                    experimental_modules: true,
-                },
-                "--nodejs-experimental-modules",
+                OutputMode::Node { module: true },
+                "--target experimental-nodejs-module",
             )?;
         }
         Ok(self)
@@ -327,6 +324,20 @@ impl Bindgen {
                 .context("failed getting Wasm module")?,
         };
 
+        // Enable reference type transformations if the module is already using it.
+        // Currently `webpack` does not support reference types.
+        if !matches!(self.mode, OutputMode::Bundler { .. })
+            && wasm_bindgen_wasm_conventions::target_feature(&module, "reference-types").ok()
+                == Some(true)
+        {
+            self.externref = true;
+        }
+
+        // Enable multivalue transformations if the module is already using it.
+        if let Ok(true) = wasm_bindgen_wasm_conventions::target_feature(&module, "multivalue") {
+            self.multi_value = true;
+        }
+
         // Check that no exported symbol is called "default" if we target web.
         if matches!(self.mode, OutputMode::Web)
             && module.exports.iter().any(|export| export.name == "default")
@@ -371,17 +382,11 @@ impl Bindgen {
         descriptors::execute(&mut module)?;
 
         // Process the custom section we extracted earlier. In its stead insert
-        // a forward-compatible wasm interface types section as well as an
+        // a forward-compatible Wasm interface types section as well as an
         // auxiliary section for all sorts of miscellaneous information and
         // features #[wasm_bindgen] supports that aren't covered by wasm
         // interface types.
-        wit::process(
-            &mut module,
-            programs,
-            self.externref,
-            thread_count,
-            self.emit_start,
-        )?;
+        wit::process(self, &mut module, programs, thread_count)?;
 
         // Now that we've got type information from the webidl processing pass,
         // touch up the output of rustc to insert externref shims where necessary.
@@ -418,7 +423,7 @@ impl Bindgen {
                 .context("failed to transform return pointers into multi-value Wasm")?;
         }
 
-        // We've done a whole bunch of transformations to the wasm module, many
+        // We've done a whole bunch of transformations to the Wasm module, many
         // of which leave "garbage" lying around, so let's prune out all our
         // unnecessary things here.
         gc_module_and_adapters(&mut module);
@@ -491,11 +496,28 @@ fn reset_indentation(s: &str) -> String {
     let mut indent: u32 = 0;
     let mut dst = String::new();
 
+    fn is_doc_comment(line: &str) -> bool {
+        line.starts_with("*")
+    }
+
     for line in s.lines() {
         let line = line.trim();
-        if line.starts_with('}') || (line.ends_with('}') && !line.starts_with('*')) {
+
+        // handle doc comments separately
+        if is_doc_comment(line) {
+            for _ in 0..indent {
+                dst.push_str("    ");
+            }
+            dst.push(' ');
+            dst.push_str(line);
+            dst.push('\n');
+            continue;
+        }
+
+        if line.starts_with('}') {
             indent = indent.saturating_sub(1);
         }
+
         let extra = if line.starts_with(':') || line.starts_with('?') {
             1
         } else {
@@ -508,8 +530,8 @@ fn reset_indentation(s: &str) -> String {
             dst.push_str(line);
         }
         dst.push('\n');
-        // Ignore { inside of comments and if it's an exported enum
-        if line.ends_with('{') && !line.starts_with('*') && !line.ends_with("Object.freeze({") {
+
+        if line.ends_with('{') {
             indent += 1;
         }
     }
@@ -548,20 +570,9 @@ impl OutputMode {
             self,
             OutputMode::Bundler { .. }
                 | OutputMode::Web
-                | OutputMode::Node {
-                    experimental_modules: true,
-                }
+                | OutputMode::Node { module: true }
                 | OutputMode::Deno
         )
-    }
-
-    fn nodejs_experimental_modules(&self) -> bool {
-        match self {
-            OutputMode::Node {
-                experimental_modules,
-            } => *experimental_modules,
-            _ => false,
-        }
     }
 
     fn nodejs(&self) -> bool {
@@ -579,10 +590,7 @@ impl OutputMode {
     fn esm_integration(&self) -> bool {
         matches!(
             self,
-            OutputMode::Bundler { .. }
-                | OutputMode::Node {
-                    experimental_modules: true,
-                }
+            OutputMode::Bundler { .. } | OutputMode::Node { module: true }
         )
     }
 }
@@ -675,23 +683,29 @@ impl Output {
                 .with_context(|| format!("failed to write `{}`", path.display()))?;
         }
 
-        if !gen.npm_dependencies.is_empty() {
-            let map = gen
-                .npm_dependencies
-                .iter()
-                .map(|(k, v)| (k, &v.1))
-                .collect::<BTreeMap<_, _>>();
-            let json = serde_json::to_string_pretty(&map)?;
+        let is_genmode_nodemodule = matches!(gen.mode, OutputMode::Node { module: true });
+        if !gen.npm_dependencies.is_empty() || is_genmode_nodemodule {
+            #[derive(serde::Serialize)]
+            struct PackageJson<'a> {
+                #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+                ty: Option<&'static str>,
+                dependencies: BTreeMap<&'a str, &'a str>,
+            }
+            let pj = PackageJson {
+                ty: is_genmode_nodemodule.then_some("module"),
+                dependencies: gen
+                    .npm_dependencies
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.1.as_str()))
+                    .collect(),
+            };
+            let json = serde_json::to_string_pretty(&pj)?;
             fs::write(out_dir.join("package.json"), json)?;
         }
 
         // And now that we've got all our JS and TypeScript, actually write it
         // out to the filesystem.
-        let extension = if gen.mode.nodejs_experimental_modules() {
-            "mjs"
-        } else {
-            "js"
-        };
+        let extension = "js";
 
         fn write<P, C>(path: P, contents: C) -> Result<(), anyhow::Error>
         where
@@ -709,17 +723,26 @@ impl Output {
 
             let start = gen.start.as_deref().unwrap_or("");
 
-            write(
-                &js_path,
-                format!(
-                    "import * as wasm from \"./{wasm_name}.wasm\";
-import {{ __wbg_set_wasm }} from \"./{js_name}\";
-__wbg_set_wasm(wasm);
+            if matches!(gen.mode, OutputMode::Node { .. }) {
+                write(
+                    &js_path,
+                    format!(
+                        "\
+{start}
+export * from \"./{js_name}\";",
+                    ),
+                )?;
+            } else {
+                write(
+                    &js_path,
+                    format!(
+                        "\
+import * as wasm from \"./{wasm_name}.wasm\";
 export * from \"./{js_name}\";
 {start}"
-                ),
-            )?;
-
+                    ),
+                )?;
+            }
             write(out_dir.join(&js_name), reset_indentation(&gen.js))?;
         } else {
             write(&js_path, reset_indentation(&gen.js))?;
@@ -744,8 +767,8 @@ export * from \"./{js_name}\";
 
 fn gc_module_and_adapters(module: &mut Module) {
     loop {
-        // Fist up, cleanup the native wasm module. Note that roots can come
-        // from custom sections, namely our wasm interface types custom section
+        // Fist up, cleanup the native Wasm module. Note that roots can come
+        // from custom sections, namely our Wasm interface types custom section
         // as well as the aux section.
         walrus::passes::gc::run(module);
 

@@ -6,4 +6,6 @@
   (export "memory" (memory 0))
   (export "__wbindgen_export_0" (table 0))
   (export "__wbindgen_start" (func 0))
+  (@custom "target_features" (after export) "\04+\0amultivalue+\0fmutable-globals+\0freference-types+\08sign-ext")
 )
+

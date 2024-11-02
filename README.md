@@ -87,7 +87,7 @@ greet("World!");
 
 * **Designed with the ["Web IDL bindings" proposal][webidl-bindings] in mind.**
   Eventually, there won't be any JavaScript shims between Rust-generated wasm
-  functions and native DOM methods. Because the wasm functions are statically
+  functions and native DOM methods. Because the Wasm functions are statically
   type checked, some of those native methods' dynamic type checks should become
   unnecessary, promising to unlock even-faster-than-JavaScript DOM access.
 
@@ -107,6 +107,12 @@ You can find general documentation about using Rust and WebAssembly together
 - [js-sys](https://docs.rs/js-sys)
 - [web-sys](https://docs.rs/web-sys)
 - [wasm-bindgen-futures](https://docs.rs/wasm-bindgen-futures)
+
+## MSRV Policy
+
+Libraries that are released on [crates.io](https://crates.io) have a MSRV of v1.57. Changes to the MSRV will be accompanied by a minor version bump.
+
+CLI tools and their corresponding support libraries have a MSRV of v1.76. Changes to the MSRV will be accompanied by a patch version bump.
 
 ## License
 

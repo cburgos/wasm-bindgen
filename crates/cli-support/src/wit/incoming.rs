@@ -1,8 +1,8 @@
-//! Definition of how to convert Rust types (`Description`) into wasm types
+//! Definition of how to convert Rust types (`Description`) into Wasm types
 //! through adapter functions.
 //!
 //! Note that many Rust types use "nonstandard" instructions which only work in
-//! the JS output, not for the "pure wasm interface types" output.
+//! the JS output, not for the "pure Wasm interface types" output.
 //!
 //! Note that the mirror operation, going from WebAssembly to JS, is found in
 //! the `outgoing.rs` module.
@@ -23,7 +23,7 @@ impl InstructionBuilder<'_, '_> {
         }
         // This is a wrapper around `_incoming` to have a number of sanity checks
         // that we don't forget things. We should always produce at least one
-        // wasm arge and exactly one webidl arg. Additionally the number of
+        // Wasm arge and exactly one webidl arg. Additionally the number of
         // bindings should always match the number of webidl types for now.
         let input_before = self.input.len();
         let output_before = self.output.len();
@@ -108,11 +108,11 @@ impl InstructionBuilder<'_, '_> {
                     &[AdapterType::I32],
                 );
             },
-            Descriptor::StringEnum { name, variant_values, invalid, .. } => {
+            Descriptor::StringEnum { name, invalid, .. } => {
                 self.instruction(
                     &[AdapterType::StringEnum(name.clone())],
                     Instruction::StringEnumToWasm {
-                        variant_values: variant_values.clone(),
+                        name: name.clone(),
                         invalid: *invalid,
                     },
                     &[AdapterType::I32],
@@ -276,13 +276,13 @@ impl InstructionBuilder<'_, '_> {
                     &[AdapterType::I32],
                 );
             }
-            Descriptor::I8 => self.in_option_sentinel(AdapterType::S8),
-            Descriptor::U8 => self.in_option_sentinel(AdapterType::U8),
-            Descriptor::I16 => self.in_option_sentinel(AdapterType::S16),
-            Descriptor::U16 => self.in_option_sentinel(AdapterType::U16),
-            Descriptor::I32 => self.in_option_native(ValType::I32),
-            Descriptor::U32 => self.in_option_native(ValType::I32),
-            Descriptor::F32 => self.in_option_native(ValType::F32),
+            Descriptor::I8 => self.in_option_sentinel32(AdapterType::S8),
+            Descriptor::U8 => self.in_option_sentinel32(AdapterType::U8),
+            Descriptor::I16 => self.in_option_sentinel32(AdapterType::S16),
+            Descriptor::U16 => self.in_option_sentinel32(AdapterType::U16),
+            Descriptor::I32 => self.in_option_sentinel64_int(AdapterType::I32, true),
+            Descriptor::U32 => self.in_option_sentinel64_int(AdapterType::U32, false),
+            Descriptor::F32 => self.in_option_sentinel64_f32(AdapterType::F32),
             Descriptor::F64 => self.in_option_native(ValType::F64),
             Descriptor::I64 | Descriptor::U64 => self.in_option_native(ValType::I64),
             Descriptor::Boolean => {
@@ -308,14 +308,13 @@ impl InstructionBuilder<'_, '_> {
             }
             Descriptor::StringEnum {
                 name,
-                variant_values,
                 invalid,
                 hole,
             } => {
                 self.instruction(
                     &[AdapterType::StringEnum(name.clone()).option()],
                     Instruction::OptionStringEnumToWasm {
-                        variant_values: variant_values.clone(),
+                        name: name.clone(),
                         invalid: *invalid,
                         hole: *hole,
                     },
@@ -460,11 +459,25 @@ impl InstructionBuilder<'_, '_> {
         );
     }
 
-    fn in_option_sentinel(&mut self, ty: AdapterType) {
+    fn in_option_sentinel32(&mut self, ty: AdapterType) {
         self.instruction(
             &[ty.option()],
             Instruction::I32FromOptionU32Sentinel,
             &[AdapterType::I32],
+        );
+    }
+    fn in_option_sentinel64_int(&mut self, ty: AdapterType, signed: bool) {
+        self.instruction(
+            &[ty.option()],
+            Instruction::F64FromOptionSentinelInt { signed },
+            &[AdapterType::F64],
+        );
+    }
+    fn in_option_sentinel64_f32(&mut self, ty: AdapterType) {
+        self.instruction(
+            &[ty.option()],
+            Instruction::F64FromOptionSentinelF32,
+            &[AdapterType::F64],
         );
     }
 }

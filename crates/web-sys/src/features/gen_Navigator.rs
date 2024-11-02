@@ -225,6 +225,17 @@ extern "C" {
     #[doc = "*This API requires the following crate features to be activated: `Navigator`*"]
     pub fn hardware_concurrency(this: &Navigator) -> f64;
     #[cfg(web_sys_unstable_apis)]
+    # [wasm_bindgen (structural , method , getter , js_class = "Navigator" , js_name = deviceMemory)]
+    #[doc = "Getter for the `deviceMemory` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/deviceMemory)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `Navigator`*"]
+    #[doc = ""]
+    #[doc = "*This API is unstable and requires `--cfg=web_sys_unstable_apis` to be activated, as"]
+    #[doc = "[described in the `wasm-bindgen` guide](https://rustwasm.github.io/docs/wasm-bindgen/web-sys/unstable-apis.html)*"]
+    pub fn device_memory(this: &Navigator) -> f64;
+    #[cfg(web_sys_unstable_apis)]
     #[cfg(feature = "Gpu")]
     # [wasm_bindgen (structural , method , getter , js_class = "Navigator" , js_name = gpu)]
     #[doc = "Getter for the `gpu` field of this object."]
@@ -368,14 +379,6 @@ extern "C" {
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `Navigator`*"]
     pub fn get_vr_displays(this: &Navigator) -> Result<::js_sys::Promise, JsValue>;
-    #[cfg(feature = "GamepadServiceTest")]
-    # [wasm_bindgen (method , structural , js_class = "Navigator" , js_name = requestGamepadServiceTest)]
-    #[doc = "The `requestGamepadServiceTest()` method."]
-    #[doc = ""]
-    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/requestGamepadServiceTest)"]
-    #[doc = ""]
-    #[doc = "*This API requires the following crate features to be activated: `GamepadServiceTest`, `Navigator`*"]
-    pub fn request_gamepad_service_test(this: &Navigator) -> GamepadServiceTest;
     # [wasm_bindgen (catch , method , structural , js_class = "Navigator" , js_name = requestMIDIAccess)]
     #[doc = "The `requestMIDIAccess()` method."]
     #[doc = ""]
@@ -454,6 +457,17 @@ extern "C" {
         url: &str,
         data: Option<&mut [u8]>,
     ) -> Result<bool, JsValue>;
+    # [wasm_bindgen (catch , method , structural , js_class = "Navigator" , js_name = sendBeacon)]
+    #[doc = "The `sendBeacon()` method."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/sendBeacon)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `Navigator`*"]
+    pub fn send_beacon_with_opt_js_u8_array(
+        this: &Navigator,
+        url: &str,
+        data: Option<&::js_sys::Uint8Array>,
+    ) -> Result<bool, JsValue>;
     #[cfg(feature = "FormData")]
     # [wasm_bindgen (catch , method , structural , js_class = "Navigator" , js_name = sendBeacon)]
     #[doc = "The `sendBeacon()` method."]
@@ -522,7 +536,7 @@ extern "C" {
     #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate)"]
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `Navigator`*"]
-    pub fn vibrate_with_duration(this: &Navigator, duration: u32) -> bool;
+    pub fn vibrate_with_duration(this: &Navigator, pattern: u32) -> bool;
     # [wasm_bindgen (method , structural , js_class = "Navigator" , js_name = vibrate)]
     #[doc = "The `vibrate()` method."]
     #[doc = ""]

@@ -6,10 +6,10 @@ use walrus::ValType;
 
 impl InstructionBuilder<'_, '_> {
     /// Processes one more `Descriptor` as an argument to a JS function that
-    /// wasm is calling.
+    /// Wasm is calling.
     ///
     /// This will internally skip `Unit` and otherwise build up the `bindings`
-    /// map and ensure that it's correctly mapped from wasm to JS.
+    /// map and ensure that it's correctly mapped from Wasm to JS.
     pub fn outgoing(&mut self, arg: &Descriptor) -> Result<(), Error> {
         if let Descriptor::Unit = arg {
             return Ok(());
@@ -74,12 +74,7 @@ impl InstructionBuilder<'_, '_> {
                 self.output.push(AdapterType::F64);
             }
             Descriptor::Enum { name, .. } => self.outgoing_i32(AdapterType::Enum(name.clone())),
-            Descriptor::StringEnum {
-                name,
-                variant_values,
-                invalid: _,
-                hole: _,
-            } => self.outgoing_string_enum(name, variant_values),
+            Descriptor::StringEnum { name, .. } => self.outgoing_string_enum(name),
 
             Descriptor::Char => {
                 self.instruction(
@@ -213,7 +208,7 @@ impl InstructionBuilder<'_, '_> {
 
             Descriptor::Function(descriptor) => {
                 // synthesize the a/b arguments that aren't present in the
-                // signature from wasm-bindgen but are present in the wasm file.
+                // signature from wasm-bindgen but are present in the Wasm file.
                 let mut descriptor = (**descriptor).clone();
                 let nargs = descriptor.arguments.len();
                 descriptor.arguments.insert(0, Descriptor::I32);
@@ -262,15 +257,15 @@ impl InstructionBuilder<'_, '_> {
                     &[AdapterType::NamedExternref(name.clone()).option()],
                 );
             }
-            Descriptor::I8 => self.out_option_sentinel(AdapterType::S8),
-            Descriptor::U8 => self.out_option_sentinel(AdapterType::U8),
-            Descriptor::I16 => self.out_option_sentinel(AdapterType::S16),
-            Descriptor::U16 => self.out_option_sentinel(AdapterType::U16),
-            Descriptor::I32 => self.option_native(true, ValType::I32),
-            Descriptor::U32 => self.option_native(false, ValType::I32),
+            Descriptor::I8 => self.out_option_sentinel32(AdapterType::S8),
+            Descriptor::U8 => self.out_option_sentinel32(AdapterType::U8),
+            Descriptor::I16 => self.out_option_sentinel32(AdapterType::S16),
+            Descriptor::U16 => self.out_option_sentinel32(AdapterType::U16),
+            Descriptor::I32 => self.out_option_sentinel64(AdapterType::S32),
+            Descriptor::U32 => self.out_option_sentinel64(AdapterType::U32),
             Descriptor::I64 => self.option_native(true, ValType::I64),
             Descriptor::U64 => self.option_native(false, ValType::I64),
-            Descriptor::F32 => self.option_native(true, ValType::F32),
+            Descriptor::F32 => self.out_option_sentinel64(AdapterType::F32),
             Descriptor::F64 => self.option_native(true, ValType::F64),
             Descriptor::Boolean => {
                 self.instruction(
@@ -293,19 +288,14 @@ impl InstructionBuilder<'_, '_> {
                     &[AdapterType::Enum(name.clone()).option()],
                 );
             }
-            Descriptor::StringEnum {
-                name,
-                invalid: _,
-                hole,
-                variant_values,
-            } => {
+            Descriptor::StringEnum { name, hole, .. } => {
                 self.instruction(
                     &[AdapterType::I32],
                     Instruction::OptionWasmToStringEnum {
-                        variant_values: variant_values.to_vec(),
+                        name: name.clone(),
                         hole: *hole,
                     },
-                    &[AdapterType::StringEnum(String::from(name))],
+                    &[AdapterType::StringEnum(name.clone()).option()],
                 );
             }
             Descriptor::RustStruct(name) => {
@@ -542,13 +532,13 @@ impl InstructionBuilder<'_, '_> {
         self.instruction(&[AdapterType::I32], instr, &[output]);
     }
 
-    fn outgoing_string_enum(&mut self, name: &str, variant_values: &[String]) {
+    fn outgoing_string_enum(&mut self, name: &str) {
         self.instruction(
             &[AdapterType::I32],
             Instruction::WasmToStringEnum {
-                variant_values: variant_values.to_vec(),
+                name: name.to_string(),
             },
-            &[AdapterType::StringEnum(String::from(name))],
+            &[AdapterType::StringEnum(name.to_string())],
         );
     }
 
@@ -586,10 +576,18 @@ impl InstructionBuilder<'_, '_> {
         );
     }
 
-    fn out_option_sentinel(&mut self, ty: AdapterType) {
+    fn out_option_sentinel32(&mut self, ty: AdapterType) {
         self.instruction(
             &[AdapterType::I32],
             Instruction::OptionU32Sentinel,
+            &[ty.option()],
+        );
+    }
+
+    fn out_option_sentinel64(&mut self, ty: AdapterType) {
+        self.instruction(
+            &[AdapterType::F64],
+            Instruction::OptionF64Sentinel,
             &[ty.option()],
         );
     }

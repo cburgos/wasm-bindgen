@@ -60,6 +60,9 @@ extern "C" {
     #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/autofocus)"]
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    #[deprecated(
+        note = "Use `HtmlElement::autofocus()` or `HtmlElement::set_autofocus()` instead."
+    )]
     pub fn autofocus(this: &HtmlInputElement) -> bool;
     # [wasm_bindgen (structural , method , setter , js_class = "HTMLInputElement" , js_name = autofocus)]
     #[doc = "Setter for the `autofocus` field of this object."]
@@ -67,6 +70,9 @@ extern "C" {
     #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/autofocus)"]
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    #[deprecated(
+        note = "Use `HtmlElement::autofocus()` or `HtmlElement::set_autofocus()` instead."
+    )]
     pub fn set_autofocus(this: &HtmlInputElement, value: bool);
     # [wasm_bindgen (structural , method , getter , js_class = "HTMLInputElement" , js_name = defaultChecked)]
     #[doc = "Getter for the `defaultChecked` field of this object."]
@@ -629,6 +635,34 @@ extern "C" {
     #[doc = ""]
     #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
     pub fn set_webkitdirectory(this: &HtmlInputElement, value: bool);
+    # [wasm_bindgen (structural , method , getter , js_class = "HTMLInputElement" , js_name = popoverTargetElement)]
+    #[doc = "Getter for the `popoverTargetElement` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/popoverTargetElement)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    pub fn popover_target_element(this: &HtmlInputElement) -> Option<Element>;
+    # [wasm_bindgen (structural , method , setter , js_class = "HTMLInputElement" , js_name = popoverTargetElement)]
+    #[doc = "Setter for the `popoverTargetElement` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/popoverTargetElement)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    pub fn set_popover_target_element(this: &HtmlInputElement, value: Option<&Element>);
+    # [wasm_bindgen (structural , method , getter , js_class = "HTMLInputElement" , js_name = popoverTargetAction)]
+    #[doc = "Getter for the `popoverTargetAction` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/popoverTargetAction)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    pub fn popover_target_action(this: &HtmlInputElement) -> String;
+    # [wasm_bindgen (structural , method , setter , js_class = "HTMLInputElement" , js_name = popoverTargetAction)]
+    #[doc = "Setter for the `popoverTargetAction` field of this object."]
+    #[doc = ""]
+    #[doc = "[MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/popoverTargetAction)"]
+    #[doc = ""]
+    #[doc = "*This API requires the following crate features to be activated: `HtmlInputElement`*"]
+    pub fn set_popover_target_action(this: &HtmlInputElement, value: &str);
     # [wasm_bindgen (method , structural , js_class = "HTMLInputElement" , js_name = checkValidity)]
     #[doc = "The `checkValidity()` method."]
     #[doc = ""]

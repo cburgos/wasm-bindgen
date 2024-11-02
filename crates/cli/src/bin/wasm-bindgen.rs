@@ -6,7 +6,7 @@ use std::process;
 use wasm_bindgen_cli_support::{Bindgen, EncodeInto};
 
 const USAGE: &str = "
-Generating JS bindings for a wasm file
+Generating JS bindings for a Wasm file
 
 Usage:
     wasm-bindgen [options] <input>
@@ -18,7 +18,7 @@ Options:
     --out-dir DIR                Output directory
     --out-name VAR               Set a custom output filename (Without extension. Defaults to crate name)
     --target TARGET              What type of output to generate, valid
-                                 values are [web, bundler, nodejs, no-modules, deno],
+                                 values are [web, bundler, nodejs, no-modules, deno, experimental-nodejs-module],
                                  and the default is [bundler]
     --no-modules-global VAR      Name of the global variable to initialize
     --browser                    Hint that JS should only be compatible with a browser
@@ -28,7 +28,7 @@ Options:
     --debug                      Include otherwise-extraneous debug checks in output
     --no-demangle                Don't demangle Rust symbol names
     --keep-lld-exports           Keep exports synthesized by LLD
-    --keep-debug                 Keep debug sections in wasm files
+    --keep-debug                 Keep debug sections in Wasm files
     --remove-name-section        Remove the debugging `name` section of the file
     --remove-producers-section   Remove the telemetry `producers` section
     --omit-default-module-path   Don't add WebAssembly fallback imports in generated JavaScript
@@ -40,7 +40,7 @@ Options:
     --web                        Deprecated, use `--target web`
     --no-modules                 Deprecated, use `--target no-modules`
     --weak-refs                  Deprecated, is runtime-detected
-    --reference-types            Enable usage of WebAssembly reference types
+    --reference-types            Deprecated, use `-Ctarget-feature=+reference-types`
     -V --version                 Print the version number of wasm-bindgen
 
 Additional documentation: https://rustwasm.github.io/wasm-bindgen/reference/cli.html
@@ -109,6 +109,7 @@ fn rmain(args: &Args) -> Result<(), Error> {
             "no-modules" => b.no_modules(true)?,
             "nodejs" => b.nodejs(true)?,
             "deno" => b.deno(true)?,
+            "experimental-nodejs-module" => b.nodejs_module(true)?,
             s => bail!("invalid encode-into mode: `{}`", s),
         };
     }
@@ -128,6 +129,7 @@ fn rmain(args: &Args) -> Result<(), Error> {
         .omit_default_module_path(args.flag_omit_default_module_path)
         .split_linked_modules(args.flag_split_linked_modules);
     if let Some(true) = args.flag_reference_types {
+        #[allow(deprecated)]
         b.reference_types(true);
     }
     if let Some(ref name) = args.flag_no_modules_global {

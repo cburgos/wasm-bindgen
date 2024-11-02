@@ -60,7 +60,7 @@ where the imports are instead handled through a separate preload script.
 
 ### `--debug`
 
-Generates a bit more JS and wasm in "debug mode" to help catch programmer
+Generates a bit more JS and Wasm in "debug mode" to help catch programmer
 errors, but this output isn't intended to be shipped to production.
 
 ### `--no-demangle`
@@ -83,14 +83,6 @@ sections.
 When generating bundler-compatible code (see the section on [deployment]) this
 indicates that the bundled code is always intended to go into a browser so a few
 checks for Node.js can be elided.
-
-### `--reference-types`
-
-Enables usage of the [WebAssembly References Types
-proposal](https://github.com/webassembly/reference-types) proposal, meaning that
-the WebAssembly binary will use `externref` when importing and exporting
-functions that work with `JsValue`. For more information see the [documentation
-about reference types](./reference-types.md).
 
 ### `--omit-default-module-path`
 

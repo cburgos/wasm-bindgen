@@ -1,5 +1,5 @@
 //! A representation of the Abstract Syntax Tree of a Rust program,
-//! with all the added metadata necessary to generate WASM bindings
+//! with all the added metadata necessary to generate Wasm bindings
 //! for it.
 
 use crate::{util::ShortHash, Diagnostic};
@@ -29,6 +29,8 @@ pub struct Program {
     pub inline_js: Vec<String>,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
+    /// Path to js_sys
+    pub js_sys: Path,
     /// Path to wasm_bindgen_futures
     pub wasm_bindgen_futures: Path,
 }
@@ -44,6 +46,7 @@ impl Default for Program {
             typescript_custom_sections: Default::default(),
             inline_js: Default::default(),
             wasm_bindgen: syn::parse_quote! { wasm_bindgen },
+            js_sys: syn::parse_quote! { js_sys },
             wasm_bindgen_futures: syn::parse_quote! { wasm_bindgen_futures },
         }
     }
@@ -97,7 +100,7 @@ pub struct Export {
     pub rust_class: Option<Ident>,
     /// The name of the rust function/method on the rust side.
     pub rust_name: Ident,
-    /// Whether or not this function should be flagged as the wasm start
+    /// Whether or not this function should be flagged as the Wasm start
     /// function.
     pub start: bool,
     /// Path to wasm_bindgen
@@ -160,6 +163,8 @@ pub enum ImportKind {
     Function(ImportFunction),
     /// Importing a static value
     Static(ImportStatic),
+    /// Importing a static string
+    String(ImportString),
     /// Importing a type/class
     Type(ImportType),
     /// Importing a JS enum
@@ -270,6 +275,28 @@ pub struct ImportStatic {
     pub js_name: String,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
+    /// [`true`] if using the new `thread_local` representation.
+    pub thread_local: bool,
+}
+
+/// The type of a static string being imported
+#[cfg_attr(feature = "extra-traits", derive(Debug, PartialEq, Eq))]
+#[derive(Clone)]
+pub struct ImportString {
+    /// The visibility of this static string in Rust
+    pub vis: syn::Visibility,
+    /// The type specified by the user, which we only use to show an error if the wrong type is used.
+    pub ty: syn::Type,
+    /// The name of the shim function used to access this static
+    pub shim: Ident,
+    /// The name of this static on the Rust side
+    pub rust_name: Ident,
+    /// Path to wasm_bindgen
+    pub wasm_bindgen: Path,
+    /// Path to js_sys
+    pub js_sys: Path,
+    /// The string to export.
+    pub string: String,
 }
 
 /// The metadata for a type being imported
@@ -310,12 +337,18 @@ pub struct StringEnum {
     pub vis: syn::Visibility,
     /// The Rust enum's identifiers
     pub name: Ident,
+    /// The name of this string enum in JS/TS code
+    pub js_name: String,
     /// The Rust identifiers for the variants
     pub variants: Vec<Ident>,
     /// The JS string values of the variants
     pub variant_values: Vec<String>,
+    /// The doc comments on this enum, if any
+    pub comments: Vec<String>,
     /// Attributes to apply to the Rust enum
     pub rust_attrs: Vec<syn::Attribute>,
+    /// Whether to generate a typescript definition for this enum
+    pub generate_typescript: bool,
     /// Path to wasm_bindgen
     pub wasm_bindgen: Path,
 }
@@ -502,6 +535,7 @@ impl ImportKind {
         match *self {
             ImportKind::Function(_) => true,
             ImportKind::Static(_) => false,
+            ImportKind::String(_) => false,
             ImportKind::Type(_) => false,
             ImportKind::Enum(_) => false,
         }

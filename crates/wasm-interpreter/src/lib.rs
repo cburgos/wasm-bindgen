@@ -1,8 +1,8 @@
-//! A tiny and incomplete wasm interpreter
+//! A tiny and incomplete Wasm interpreter
 //!
-//! This module contains a tiny and incomplete wasm interpreter built on top of
+//! This module contains a tiny and incomplete Wasm interpreter built on top of
 //! `walrus`'s module structure. Each `Interpreter` contains some state
-//! about the execution of a wasm instance. The "incomplete" part here is
+//! about the execution of a Wasm instance. The "incomplete" part here is
 //! related to the fact that this is *only* used to execute the various
 //! descriptor functions for wasm-bindgen.
 //!
@@ -18,15 +18,16 @@
 
 #![deny(missing_docs)]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use anyhow::{bail, ensure};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use walrus::ir::Instr;
 use walrus::{ElementId, FunctionId, LocalId, Module, TableId};
 
-/// A ready-to-go interpreter of a wasm module.
+/// A ready-to-go interpreter of a Wasm module.
 ///
 /// An interpreter currently represents effectively cached state. It is reused
 /// between calls to `interpret` and is precomputed from a `Module`. It houses
-/// state like the wasm stack, wasm memory, etc.
+/// state like the Wasm stack, Wasm memory, etc.
 #[derive(Default)]
 pub struct Interpreter {
     // Function index of the `__wbindgen_describe` and
@@ -42,7 +43,7 @@ pub struct Interpreter {
     // functions.
     name_map: HashMap<String, FunctionId>,
 
-    // The current stack pointer (global 0) and wasm memory (the stack). Only
+    // The current stack pointer (global 0) and Wasm memory (the stack). Only
     // used in a limited capacity.
     sp: i32,
     mem: Vec<i32>,
@@ -69,7 +70,7 @@ impl Interpreter {
         let mut ret = Interpreter::default();
 
         // Give ourselves some memory and set the stack pointer
-        // (the LLVM call stack, now the wasm stack, global 0) to the top.
+        // (the LLVM call stack, now the Wasm stack, global 0) to the top.
         ret.mem = vec![0; 0x8000];
         ret.sp = ret.mem.len() as i32;
 
@@ -129,7 +130,7 @@ impl Interpreter {
     pub fn interpret_descriptor(&mut self, id: FunctionId, module: &Module) -> Option<&[u32]> {
         self.descriptor.truncate(0);
 
-        // We should have a blank wasm and LLVM stack at both the start and end
+        // We should have a blank Wasm and LLVM stack at both the start and end
         // of the call.
         assert_eq!(self.sp, self.mem.len() as i32);
         self.call(id, module, &[]);
@@ -157,7 +158,7 @@ impl Interpreter {
         &mut self,
         id: FunctionId,
         module: &Module,
-        entry_removal_list: &mut HashSet<(ElementId, usize)>,
+        entry_removal_list: &mut HashMap<ElementId, BTreeSet<usize>>,
     ) -> Option<&[u32]> {
         // Call the `id` function. This is an internal `#[inline(never)]`
         // whose code is completely controlled by the `wasm-bindgen` crate, so
@@ -194,7 +195,10 @@ impl Interpreter {
             wasm_bindgen_wasm_conventions::get_function_table_entry(module, descriptor_table_idx)
                 .expect("failed to find entry in function table");
         let descriptor_id = entry.func.expect("element segment slot wasn't set");
-        entry_removal_list.insert((entry.element, entry.idx));
+        entry_removal_list
+            .entry(entry.element)
+            .or_default()
+            .insert(entry.idx);
 
         // And now execute the descriptor!
         self.interpret_descriptor(descriptor_id, module)
@@ -236,7 +240,14 @@ impl Interpreter {
         }
 
         for (instr, _) in block.instrs.iter() {
-            frame.eval(instr);
+            if let Err(err) = frame.eval(instr) {
+                if let Some(name) = &module.funcs.get(id).name {
+                    panic!("{name}: {err}")
+                } else {
+                    panic!("{err}")
+                }
+            }
+
             if frame.done {
                 break;
             }
@@ -253,7 +264,7 @@ struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    fn eval(&mut self, instr: &Instr) {
+    fn eval(&mut self, instr: &Instr) -> anyhow::Result<()> {
         use walrus::ir::*;
 
         let stack = &mut self.interp.scratch;
@@ -261,7 +272,7 @@ impl Frame<'_> {
         match instr {
             Instr::Const(c) => match c.value {
                 Value::I32(n) => stack.push(n),
-                _ => panic!("non-i32 constant"),
+                _ => bail!("non-i32 constant"),
             },
             Instr::LocalGet(e) => stack.push(self.locals.get(&e.local).cloned().unwrap_or(0)),
             Instr::LocalSet(e) => {
@@ -288,7 +299,7 @@ impl Frame<'_> {
                 stack.push(match e.op {
                     BinaryOp::I32Sub => lhs - rhs,
                     BinaryOp::I32Add => lhs + rhs,
-                    op => panic!("invalid binary op {:?}", op),
+                    op => bail!("invalid binary op {:?}", op),
                 });
             }
 
@@ -297,23 +308,23 @@ impl Frame<'_> {
             // theory there doesn't need to be.
             Instr::Load(e) => {
                 let address = stack.pop().unwrap();
-                assert!(
+                ensure!(
                     address > 0,
                     "Read a negative address value from the stack. Did we run out of memory?"
                 );
                 let address = address as u32 + e.arg.offset;
-                assert!(address % 4 == 0);
+                ensure!(address % 4 == 0);
                 stack.push(self.interp.mem[address as usize / 4])
             }
             Instr::Store(e) => {
                 let value = stack.pop().unwrap();
                 let address = stack.pop().unwrap();
-                assert!(
+                ensure!(
                     address > 0,
                     "Read a negative address value from the stack. Did we run out of memory?"
                 );
                 let address = address as u32 + e.arg.offset;
-                assert!(address % 4 == 0);
+                ensure!(address % 4 == 0);
                 self.interp.mem[address as usize / 4] = value;
             }
 
@@ -327,13 +338,14 @@ impl Frame<'_> {
                 stack.pop().unwrap();
             }
 
-            Instr::Call(e) => {
+            Instr::Call(Call { func }) | Instr::ReturnCall(ReturnCall { func }) => {
+                let func = *func;
                 // If this function is calling the `__wbindgen_describe`
                 // function, which we've precomputed the id for, then
                 // it's telling us about the next `u32` element in the
                 // descriptor to return. We "call" the imported function
                 // here by directly inlining it.
-                if Some(e.func) == self.interp.describe_id {
+                if Some(func) == self.interp.describe_id {
                     let val = stack.pop().unwrap();
                     log::debug!("__wbindgen_describe({})", val);
                     self.interp.descriptor.push(val as u32);
@@ -343,7 +355,7 @@ impl Frame<'_> {
                 // slightly different signature. Note that we don't eval the
                 // previous arguments because they shouldn't have any side
                 // effects we're interested in.
-                } else if Some(e.func) == self.interp.describe_closure_id {
+                } else if Some(func) == self.interp.describe_closure_id {
                     let val = stack.pop().unwrap();
                     stack.pop();
                     stack.pop();
@@ -353,11 +365,33 @@ impl Frame<'_> {
 
                 // ... otherwise this is a normal call so we recurse.
                 } else {
-                    let ty = self.module.types.get(self.module.funcs.get(e.func).ty());
+                    // Skip profiling related functions which we don't want to interpret.
+                    if self
+                        .module
+                        .funcs
+                        .get(func)
+                        .name
+                        .as_ref()
+                        .is_some_and(|name| {
+                            name.starts_with("__llvm_profile_init")
+                                || name.starts_with("__llvm_profile_register_function")
+                                || name.starts_with("__llvm_profile_register_function")
+                        })
+                    {
+                        return Ok(());
+                    }
+
+                    let ty = self.module.types.get(self.module.funcs.get(func).ty());
                     let args = (0..ty.params().len())
                         .map(|_| stack.pop().unwrap())
                         .collect::<Vec<_>>();
-                    self.interp.call(e.func, self.module, &args);
+
+                    self.interp.call(func, self.module, &args);
+                }
+
+                if let Instr::ReturnCall(_) = instr {
+                    log::debug!("return_call");
+                    self.done = true;
                 }
             }
 
@@ -370,7 +404,9 @@ impl Frame<'_> {
             // Note that LLVM may change over time to generate new
             // instructions in debug mode, and we'll have to react to those
             // sorts of changes as they arise.
-            s => panic!("unknown instruction {:?}", s),
+            s => bail!("unknown instruction {:?}", s),
         }
+
+        Ok(())
     }
 }

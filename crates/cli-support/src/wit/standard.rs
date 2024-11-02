@@ -1,15 +1,19 @@
 use crate::descriptor::VectorKind;
 use crate::wit::{AuxImport, WasmBindgenAux};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use walrus::{FunctionId, ImportId, TypedCustomSectionId};
+use std::collections::{BTreeMap, HashSet};
+use walrus::{FunctionId, ImportId, RefType, TypedCustomSectionId};
 
 #[derive(Default, Debug)]
 pub struct NonstandardWitSection {
     /// A list of adapter functions, keyed by their id.
-    pub adapters: HashMap<AdapterId, Adapter>,
+    ///
+    /// This map is iterated over in multiple places, so we use an ordered map
+    /// to ensure that the order of iteration is deterministic. This map affects
+    /// all parts of the generated code, so it's important to get this right.
+    pub adapters: BTreeMap<AdapterId, Adapter>,
 
-    /// A list of pairs for adapter functions that implement core wasm imports.
+    /// A list of pairs for adapter functions that implement core Wasm imports.
     pub implements: Vec<(ImportId, FunctionId, AdapterId)>,
 
     /// A list of adapter functions and the names they're exported under.
@@ -130,35 +134,35 @@ pub enum Instruction {
         size: u32,
     },
 
-    /// Pops a typed integer (`u8`, `s16`, etc.) and pushes a plain wasm `i32` or `i64` equivalent.
+    /// Pops a typed integer (`u8`, `s16`, etc.) and pushes a plain Wasm `i32` or `i64` equivalent.
     IntToWasm {
         input: AdapterType,
         output: walrus::ValType,
     },
-    /// Pops a wasm `i32` or `i64` and pushes a typed integer (`u8`, `s16`, etc.) equivalent.
+    /// Pops a Wasm `i32` or `i64` and pushes a typed integer (`u8`, `s16`, etc.) equivalent.
     WasmToInt {
         input: walrus::ValType,
         output: AdapterType,
     },
 
-    /// Pops a wasm `i32` and pushes the enum variant as a string
+    /// Pops a Wasm `i32` and pushes the enum variant as a string
     WasmToStringEnum {
-        variant_values: Vec<String>,
+        name: String,
     },
 
     OptionWasmToStringEnum {
-        variant_values: Vec<String>,
+        name: String,
         hole: u32,
     },
 
     /// pops a string and pushes the enum variant as an `i32`
     StringEnumToWasm {
-        variant_values: Vec<String>,
+        name: String,
         invalid: u32,
     },
 
     OptionStringEnumToWasm {
-        variant_values: Vec<String>,
+        name: String,
         invalid: u32,
         hole: u32,
     },
@@ -170,7 +174,7 @@ pub enum Instruction {
     /// Pops an `externref` from the stack, allocates space in the externref table,
     /// returns the index it was stored at.
     I32FromExternrefOwned,
-    /// Pops an `externref` from the stack, pushes it onto the externref wasm table
+    /// Pops an `externref` from the stack, pushes it onto the externref Wasm table
     /// stack, and returns the index it was stored at.
     I32FromExternrefBorrow,
     /// Pops an `externref` from the stack, assumes it's a Rust class given, and
@@ -190,7 +194,7 @@ pub enum Instruction {
         class: String,
     },
     /// Pops an `externref` from the stack, pushes either 0 if it's "none" or and
-    /// index into the owned wasm table it was stored at if it's "some"
+    /// index into the owned Wasm table it was stored at if it's "some"
     I32FromOptionExternref {
         /// Set to `Some` by the externref pass of where to put it in the wasm
         /// module, otherwise it's shoved into the JS shim.
@@ -210,6 +214,14 @@ pub enum Instruction {
     I32FromOptionEnum {
         hole: u32,
     },
+    /// Pops an `externref` from the stack, pushes either a sentinel value if it's
+    /// "none" or the integer value of it if it's "some"
+    F64FromOptionSentinelInt {
+        signed: bool,
+    },
+    /// Pops an `externref` from the stack, pushes either a sentinel value if it's
+    /// "none" or the f32 value of it if it's "some"
+    F64FromOptionSentinelF32,
     /// Pops any externref from the stack and then pushes two values. First is a
     /// 0/1 if it's none/some and second is `ty` value if it was there or 0 if
     /// it wasn't there.
@@ -320,6 +332,8 @@ pub enum Instruction {
         kind: VectorKind,
         mem: walrus::MemoryId,
     },
+    /// pops f64, pushes it viewed as an optional value with a known sentinel
+    OptionF64Sentinel,
     /// pops i32, pushes it viewed as an optional value with a known sentinel
     OptionU32Sentinel,
     /// pops an i32, then `ty`, then pushes externref
@@ -344,8 +358,8 @@ impl AdapterType {
             walrus::ValType::I64 => AdapterType::I64,
             walrus::ValType::F32 => AdapterType::F32,
             walrus::ValType::F64 => AdapterType::F64,
-            walrus::ValType::Externref => AdapterType::Externref,
-            walrus::ValType::Funcref | walrus::ValType::V128 => return None,
+            walrus::ValType::Ref(RefType::Externref) => AdapterType::Externref,
+            walrus::ValType::Ref(_) | walrus::ValType::V128 => return None,
         })
     }
 
@@ -356,7 +370,9 @@ impl AdapterType {
             AdapterType::F32 => walrus::ValType::F32,
             AdapterType::F64 => walrus::ValType::F64,
             AdapterType::Enum(_) => walrus::ValType::I32,
-            AdapterType::Externref | AdapterType::NamedExternref(_) => walrus::ValType::Externref,
+            AdapterType::Externref | AdapterType::NamedExternref(_) => {
+                walrus::ValType::Ref(RefType::Externref)
+            }
             _ => return None,
         })
     }

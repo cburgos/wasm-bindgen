@@ -134,14 +134,6 @@ partial interface Navigator {
   Promise<BatteryManager> getBattery();
 };
 
-// http://www.w3.org/TR/vibration/#vibration-interface
-partial interface Navigator {
-    // We don't support sequences in unions yet
-    //boolean vibrate ((unsigned long or sequence<unsigned long>) pattern);
-    boolean vibrate(unsigned long duration);
-    boolean vibrate(sequence<unsigned long> pattern);
-};
-
 // http://www.w3.org/TR/pointerevents/#extensions-to-the-navigator-interface
 partial interface Navigator {
     [Pref="dom.w3c_pointer_events.enabled"]
@@ -159,16 +151,6 @@ partial interface Navigator {
 partial interface Navigator {
   [Throws, Pref="dom.netinfo.enabled"]
   readonly attribute NetworkInformation connection;
-};
-
-// https://dvcs.w3.org/hg/gamepad/raw-file/default/gamepad.html#navigator-interface-extension
-partial interface Navigator {
-  [Throws, Pref="dom.gamepad.enabled"]
-  sequence<Gamepad?> getGamepads();
-};
-partial interface Navigator {
-  [Pref="dom.gamepad.test.enabled"]
-  GamepadServiceTest requestGamepadServiceTest();
 };
 
 partial interface Navigator {

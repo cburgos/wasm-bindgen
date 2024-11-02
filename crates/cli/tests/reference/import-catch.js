@@ -27,15 +27,6 @@ function handleError(f, args) {
     }
 }
 
-let cachedInt32Memory0 = null;
-
-function getInt32Memory0() {
-    if (cachedInt32Memory0 === null || cachedInt32Memory0.byteLength === 0) {
-        cachedInt32Memory0 = new Int32Array(wasm.memory.buffer);
-    }
-    return cachedInt32Memory0;
-}
-
 function getObject(idx) { return heap[idx]; }
 
 function dropObject(idx) {
@@ -49,19 +40,11 @@ function takeObject(idx) {
     dropObject(idx);
     return ret;
 }
-/**
-*/
+
 export function exported() {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        wasm.exported(retptr);
-        var r0 = getInt32Memory0()[retptr / 4 + 0];
-        var r1 = getInt32Memory0()[retptr / 4 + 1];
-        if (r1) {
-            throw takeObject(r0);
-        }
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
+    const ret = wasm.exported();
+    if (ret[1]) {
+        throw takeObject(ret[0]);
     }
 }
 

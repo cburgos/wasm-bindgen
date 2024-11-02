@@ -1,6 +1,12 @@
 //! See the README for `wasm-bindgen-test` for a bit more info about what's
 //! going on here.
 
+#![cfg_attr(
+    wasm_bindgen_unstable_test_coverage,
+    feature(allow_internal_unstable),
+    allow(internal_features)
+)]
+
 extern crate proc_macro;
 
 use proc_macro2::*;
@@ -12,6 +18,10 @@ use std::sync::atomic::*;
 static CNT: AtomicUsize = AtomicUsize::new(0);
 
 #[proc_macro_attribute]
+#[cfg_attr(
+    wasm_bindgen_unstable_test_coverage,
+    allow_internal_unstable(coverage_attribute)
+)]
 pub fn wasm_bindgen_test(
     attr: proc_macro::TokenStream,
     body: proc_macro::TokenStream,
@@ -72,7 +82,7 @@ pub fn wasm_bindgen_test(
 
     let mut tokens = Vec::<TokenTree>::new();
 
-    let should_panic = match should_panic {
+    let should_panic_par = match &should_panic {
         Some(Some(lit)) => {
             quote! { ::core::option::Option::Some(::core::option::Option::Some(#lit)) }
         }
@@ -89,9 +99,9 @@ pub fn wasm_bindgen_test(
     };
 
     let test_body = if attributes.r#async {
-        quote! { cx.execute_async(test_name, #ident, #should_panic, #ignore); }
+        quote! { cx.execute_async(test_name, #ident, #should_panic_par, #ignore); }
     } else {
-        quote! { cx.execute_sync(test_name, #ident, #should_panic, #ignore); }
+        quote! { cx.execute_sync(test_name, #ident, #should_panic_par, #ignore); }
     };
 
     // We generate a `#[no_mangle]` with a known prefix so the test harness can
@@ -101,13 +111,35 @@ pub fn wasm_bindgen_test(
     let wasm_bindgen_path = attributes.wasm_bindgen_path;
     tokens.extend(
         quote! {
-            #[no_mangle]
-            pub extern "C" fn #name(cx: &#wasm_bindgen_path::__rt::Context) {
-                let test_name = ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident));
-                #test_body
-            }
+            const _: () = {
+                #[no_mangle]
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+                #[cfg_attr(wasm_bindgen_unstable_test_coverage, coverage(off))]
+                pub extern "C" fn #name(cx: &#wasm_bindgen_path::__rt::Context) {
+                    let test_name = ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#ident));
+                    #test_body
+                }
+            };
         },
     );
+
+    if let Some(path) = attributes.unsupported {
+        tokens.extend(
+            quote! { #[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), #path)] },
+        );
+
+        if let Some(should_panic) = should_panic {
+            let should_panic = if let Some(lit) = should_panic {
+                quote! { should_panic = #lit }
+            } else {
+                quote! { should_panic }
+            };
+
+            tokens.extend(
+                quote! { #[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), #should_panic)] }
+            )
+        }
+    }
 
     tokens.extend(leading_tokens);
     tokens.push(ident.into());
@@ -270,6 +302,7 @@ fn compile_error(span: Span, msg: &str) -> proc_macro::TokenStream {
 struct Attributes {
     r#async: bool,
     wasm_bindgen_path: syn::Path,
+    unsupported: Option<syn::Meta>,
 }
 
 impl Default for Attributes {
@@ -277,6 +310,7 @@ impl Default for Attributes {
         Self {
             r#async: false,
             wasm_bindgen_path: syn::parse_quote!(::wasm_bindgen_test),
+            unsupported: None,
         }
     }
 }
@@ -287,6 +321,8 @@ impl Attributes {
             self.r#async = true;
         } else if meta.path.is_ident("crate") {
             self.wasm_bindgen_path = meta.value()?.parse::<syn::Path>()?;
+        } else if meta.path.is_ident("unsupported") {
+            self.unsupported = Some(meta.value()?.parse::<syn::Meta>()?);
         } else {
             return Err(meta.error("unknown attribute"));
         }

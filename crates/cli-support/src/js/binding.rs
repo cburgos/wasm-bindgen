@@ -8,6 +8,7 @@ use crate::js::Context;
 use crate::wit::InstructionData;
 use crate::wit::{Adapter, AdapterId, AdapterKind, AdapterType, Instruction};
 use anyhow::{anyhow, bail, Error};
+use std::collections::HashSet;
 use std::fmt::Write;
 use walrus::{Module, ValType};
 
@@ -36,6 +37,9 @@ pub struct JsBuilder<'a, 'b> {
     /// JS functions, etc.
     cx: &'a mut Context<'b>,
 
+    /// A debug name for the function being generated, used for error messages
+    debug_name: &'a str,
+
     /// The "prelude" of the function, or largely just the JS function we've
     /// built so far.
     prelude: String,
@@ -54,7 +58,7 @@ pub struct JsBuilder<'a, 'b> {
     /// use to translate the `arg.get` instruction.
     args: Vec<String>,
 
-    /// The wasm interface types "stack". The expressions pushed onto this stack
+    /// The Wasm interface types "stack". The expressions pushed onto this stack
     /// are intended to be *pure*, and if they're not, they should be pushed
     /// into the `prelude`, assigned to a variable, and the variable should be
     /// pushed to the stack. We're not super principled about this though, so
@@ -68,12 +72,21 @@ pub struct JsFunction {
     pub js_doc: String,
     pub ts_arg_tys: Vec<String>,
     pub ts_ret_ty: Option<String>,
+    pub ts_refs: HashSet<TsReference>,
     /// Whether this function has a single optional argument.
     ///
     /// If the function is a setter, that means that the field it sets is optional.
     pub might_be_optional_field: bool,
     pub catch: bool,
     pub log_error: bool,
+}
+
+/// A references to an (likely) exported symbol used in TS type expression.
+///
+/// Right now, only string enum require this type of anaylsis.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TsReference {
+    StringEnum(String),
 }
 
 impl<'a, 'b> Builder<'a, 'b> {
@@ -111,6 +124,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         asyncness: bool,
         variadic: bool,
         generate_jsdoc: bool,
+        debug_name: &str,
     ) -> Result<JsFunction, Error> {
         if self
             .cx
@@ -128,7 +142,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         // If this is a method then we're generating this as part of a class
         // method, so the leading parameter is the this pointer stored on
         // the JS object, so synthesize that here.
-        let mut js = JsBuilder::new(self.cx);
+        let mut js = JsBuilder::new(self.cx, debug_name);
         if let Some(consumes_self) = self.method {
             let _ = params.next();
             if js.cx.config.debug {
@@ -164,7 +178,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         // We don't actually manage a literal stack at runtime, but instead we
         // act as more of a compiler to generate straight-line code to make it
         // more JIT-friendly. The generated code should be equivalent to the
-        // wasm interface types stack machine, however.
+        // Wasm interface types stack machine, however.
         for instr in instructions {
             instruction(
                 &mut js,
@@ -174,7 +188,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             )?;
         }
 
-        assert_eq!(js.stack.len(), adapter.results.len());
+        assert_eq!(
+            js.stack.len(),
+            adapter.results.len(),
+            "stack size mismatch for {}",
+            debug_name
+        );
         match js.stack.len() {
             0 => {}
             1 => {
@@ -246,7 +265,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         // should start from here. Struct fields(Getter) only have one arg, and
         // this is the clue we can infer if a function might be a field.
         let mut might_be_optional_field = false;
-        let (ts_sig, ts_arg_tys, ts_ret_ty) = self.typescript_signature(
+        let (ts_sig, ts_arg_tys, ts_ret_ty, ts_refs) = self.typescript_signature(
             &function_args,
             &arg_tys,
             &adapter.inner_results,
@@ -266,6 +285,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             js_doc,
             ts_arg_tys,
             ts_ret_ty,
+            ts_refs,
             might_be_optional_field,
             catch: self.catch,
             log_error: self.log_error,
@@ -285,11 +305,12 @@ impl<'a, 'b> Builder<'a, 'b> {
         might_be_optional_field: &mut bool,
         asyncness: bool,
         variadic: bool,
-    ) -> (String, Vec<String>, Option<String>) {
+    ) -> (String, Vec<String>, Option<String>, HashSet<TsReference>) {
         // Build up the typescript signature as well
         let mut omittable = true;
         let mut ts_args = Vec::new();
         let mut ts_arg_tys = Vec::new();
+        let mut ts_refs = HashSet::new();
         for (name, ty) in arg_names.iter().zip(arg_tys).rev() {
             // In TypeScript, we can mark optional parameters as omittable
             // using the `?` suffix, but only if they're not followed by
@@ -301,12 +322,12 @@ impl<'a, 'b> Builder<'a, 'b> {
             match ty {
                 AdapterType::Option(ty) if omittable => {
                     arg.push_str("?: ");
-                    adapter2ts(ty, &mut ts);
+                    adapter2ts(ty, &mut ts, Some(&mut ts_refs));
                 }
                 ty => {
                     omittable = false;
                     arg.push_str(": ");
-                    adapter2ts(ty, &mut ts);
+                    adapter2ts(ty, &mut ts, Some(&mut ts_refs));
                 }
             }
             arg.push_str(&ts);
@@ -342,7 +363,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             let mut ret = String::new();
             match result_tys.len() {
                 0 => ret.push_str("void"),
-                1 => adapter2ts(&result_tys[0], &mut ret),
+                1 => adapter2ts(&result_tys[0], &mut ret, Some(&mut ts_refs)),
                 _ => ret.push_str("[any]"),
             }
             if asyncness {
@@ -351,7 +372,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             ts.push_str(&ret);
             ts_ret = Some(ret);
         }
-        (ts, ts_arg_tys, ts_ret)
+        (ts, ts_arg_tys, ts_ret, ts_refs)
     }
 
     /// Returns a helpful JS doc comment which lists types for all parameters
@@ -374,7 +395,7 @@ impl<'a, 'b> Builder<'a, 'b> {
         for (name, ty) in fn_arg_names.iter().zip(arg_tys).rev() {
             let mut arg = "@param {".to_string();
 
-            adapter2ts(ty, &mut arg);
+            adapter2ts(ty, &mut arg, None);
             arg.push_str("} ");
             match ty {
                 AdapterType::Option(..) if omittable => {
@@ -395,7 +416,7 @@ impl<'a, 'b> Builder<'a, 'b> {
 
         if let (Some(name), Some(ty)) = (variadic_arg, arg_tys.last()) {
             ret.push_str("@param {...");
-            adapter2ts(ty, &mut ret);
+            adapter2ts(ty, &mut ret, None);
             ret.push_str("} ");
             ret.push_str(name);
             ret.push('\n');
@@ -410,9 +431,10 @@ impl<'a, 'b> Builder<'a, 'b> {
 }
 
 impl<'a, 'b> JsBuilder<'a, 'b> {
-    pub fn new(cx: &'a mut Context<'b>) -> JsBuilder<'a, 'b> {
+    pub fn new(cx: &'a mut Context<'b>, debug_name: &'a str) -> JsBuilder<'a, 'b> {
         JsBuilder {
             cx,
+            debug_name,
             args: Vec::new(),
             tmp: 0,
             pre_try: String::new(),
@@ -451,7 +473,10 @@ impl<'a, 'b> JsBuilder<'a, 'b> {
     }
 
     fn pop(&mut self) -> String {
-        self.stack.pop().unwrap()
+        match self.stack.pop() {
+            Some(s) => s,
+            None => panic!("popping an empty stack in {}", self.debug_name),
+        }
     }
 
     fn push(&mut self, arg: String) {
@@ -576,6 +601,25 @@ fn instruction(
     log_error: &mut bool,
     constructor: &Option<String>,
 ) -> Result<(), Error> {
+    fn wasm_to_string_enum(name: &str, index: &str) -> String {
+        // e.g. ["a","b","c"][someIndex]
+        format!("__wbindgen_enum_{name}[{index}]")
+    }
+    fn string_enum_to_wasm(name: &str, invalid: u32, enum_val: &str) -> String {
+        // e.g. (["a","b","c"].indexOf(someEnumVal) + 1 || 4) - 1
+        //                                                 |
+        //                                           invalid + 1
+        //
+        // The idea is that `indexOf` returns -1 if someEnumVal is invalid,
+        // and with +1 we get 0 which is falsey, so we can use || to
+        // substitute invalid+1. Finally, we just do -1 to get the correct
+        // values for everything.
+        format!(
+            "(__wbindgen_enum_{name}.indexOf({enum_val}) + 1 || {invalid}) - 1",
+            invalid = invalid + 1
+        )
+    }
+
     match instr {
         Instruction::ArgGet(n) => {
             let arg = js.arg(*n).to_string();
@@ -668,93 +712,40 @@ fn instruction(
             }
         }
 
-        Instruction::WasmToStringEnum { variant_values } => {
+        Instruction::WasmToStringEnum { name } => {
             let index = js.pop();
-
-            // e.g. ["a","b","c"][someIndex]
-            let mut enum_val_expr = String::new();
-            enum_val_expr.push('[');
-            for variant in variant_values {
-                enum_val_expr.push_str(&format!("\"{variant}\","));
-            }
-            enum_val_expr.push(']');
-            enum_val_expr.push('[');
-            enum_val_expr.push_str(&index);
-            enum_val_expr.push(']');
-
-            js.push(enum_val_expr)
+            js.cx.expose_string_enum(name);
+            js.push(wasm_to_string_enum(name, &index))
         }
 
-        Instruction::OptionWasmToStringEnum {
-            variant_values,
-            hole,
-        } => {
+        Instruction::OptionWasmToStringEnum { name, .. } => {
+            // Since hole is currently variant_count+1 and the lookup is
+            // ["a","b","c"][index], the lookup will implicitly return map
+            // the hole to undefined, because OOB indexes will return undefined.
             let index = js.pop();
-
-            let mut enum_val_expr = String::new();
-            enum_val_expr.push('[');
-            for variant in variant_values {
-                enum_val_expr.push_str(&format!("\"{variant}\","));
-            }
-            enum_val_expr.push(']');
-            enum_val_expr.push('[');
-            enum_val_expr.push_str(&index);
-            enum_val_expr.push(']');
-
-            // e.g. someIndex === 4 ? undefined : (["a","b","c"][someIndex])
-            //                    |
-            //      currently, hole = variant_count + 1
-            js.push(format!(
-                "{index} === {hole} ? undefined : ({enum_val_expr})"
-            ))
+            js.cx.expose_string_enum(name);
+            js.push(wasm_to_string_enum(name, &index))
         }
 
-        Instruction::StringEnumToWasm {
-            variant_values,
-            invalid,
-        } => {
+        Instruction::StringEnumToWasm { name, invalid } => {
             let enum_val = js.pop();
-
-            // e.g. {"a":0,"b":1,"c":2}[someEnumVal] ?? 3
-            //                                          |
-            //                          currently, invalid = variant_count
-            let mut enum_val_expr = String::new();
-            enum_val_expr.push('{');
-            for (i, variant) in variant_values.iter().enumerate() {
-                enum_val_expr.push_str(&format!("\"{variant}\":{i},"));
-            }
-            enum_val_expr.push('}');
-            enum_val_expr.push('[');
-            enum_val_expr.push_str(&enum_val);
-            enum_val_expr.push(']');
-            enum_val_expr.push_str(&format!(" ?? {invalid}"));
-
-            js.push(enum_val_expr)
+            js.cx.expose_string_enum(name);
+            js.push(string_enum_to_wasm(name, *invalid, &enum_val))
         }
 
         Instruction::OptionStringEnumToWasm {
-            variant_values,
+            name,
             invalid,
             hole,
         } => {
             let enum_val = js.pop();
+            js.cx.expose_string_enum(name);
+            let enum_val_expr = string_enum_to_wasm(name, *invalid, &enum_val);
+            js.cx.expose_is_like_none();
 
-            let mut enum_val_expr = String::new();
-            enum_val_expr.push('{');
-            for (i, variant) in variant_values.iter().enumerate() {
-                enum_val_expr.push_str(&format!("\"{variant}\":{i},"));
-            }
-            enum_val_expr.push('}');
-            enum_val_expr.push('[');
-            enum_val_expr.push_str(&enum_val);
-            enum_val_expr.push(']');
-            enum_val_expr.push_str(&format!(" ?? {invalid}"));
-
-            // e.g. someEnumVal == undefined ? 4 : ({"a":0,"b":1,"c":2}[someEnumVal] ?? 3)
-            //                  |
-            //    double equals here in case it's null
+            // e.g. isLikeNone(someEnumVal) ? 4 : (string_enum_to_wasm(someEnumVal))
             js.push(format!(
-                "{enum_val} == undefined ? {hole} : ({enum_val_expr})"
+                "isLikeNone({enum_val}) ? {hole} : ({enum_val_expr})"
             ))
         }
 
@@ -784,19 +775,21 @@ fn instruction(
         }
 
         Instruction::StoreRetptr { ty, offset, mem } => {
-            let (mem, size) = match ty {
-                AdapterType::I32 => (js.cx.expose_int32_memory(*mem), 4),
-                AdapterType::I64 => (js.cx.expose_int64_memory(*mem), 8),
-                AdapterType::F32 => (js.cx.expose_f32_memory(*mem), 4),
-                AdapterType::F64 => (js.cx.expose_f64_memory(*mem), 8),
+            let mem = js.cx.expose_dataview_memory(*mem);
+            let (method, size) = match ty {
+                AdapterType::I32 => ("setInt32", 4),
+                AdapterType::I64 => ("setBigInt64", 8),
+                AdapterType::F32 => ("setFloat32", 4),
+                AdapterType::F64 => ("setFloat64", 8),
                 other => bail!("invalid aggregate return type {:?}", other),
             };
             // Note that we always assume the return pointer is argument 0,
             // which is currently the case for LLVM.
             let val = js.pop();
             let expr = format!(
-                "{}()[{} / {} + {}] = {};",
+                "{}().{}({} + {} * {}, {}, true);",
                 mem,
+                method,
                 js.arg(0),
                 size,
                 offset,
@@ -806,11 +799,12 @@ fn instruction(
         }
 
         Instruction::LoadRetptr { ty, offset, mem } => {
-            let (mem, quads) = match ty {
-                AdapterType::I32 => (js.cx.expose_int32_memory(*mem), 1),
-                AdapterType::I64 => (js.cx.expose_int64_memory(*mem), 2),
-                AdapterType::F32 => (js.cx.expose_f32_memory(*mem), 1),
-                AdapterType::F64 => (js.cx.expose_f64_memory(*mem), 2),
+            let mem = js.cx.expose_dataview_memory(*mem);
+            let (method, quads) = match ty {
+                AdapterType::I32 => ("getInt32", 1),
+                AdapterType::I64 => ("getBigInt64", 2),
+                AdapterType::F32 => ("getFloat32", 1),
+                AdapterType::F64 => ("getFloat64", 2),
                 other => bail!("invalid aggregate return type {:?}", other),
             };
             let size = quads * 4;
@@ -820,7 +814,10 @@ fn instruction(
             // If we're loading from the return pointer then we must have pushed
             // it earlier, and we always push the same value, so load that value
             // here
-            let expr = format!("{}()[retptr / {} + {}]", mem, size, scaled_offset);
+            let expr = format!(
+                "{}().{}(retptr + {} * {}, true)",
+                mem, method, size, scaled_offset
+            );
             js.prelude(&format!("var r{} = {};", offset, expr));
             js.push(format!("r{}", offset));
         }
@@ -934,6 +931,44 @@ fn instruction(
             js.cx.expose_is_like_none();
             js.assert_optional_number(&val);
             js.push(format!("isLikeNone({0}) ? {1} : {0}", val, hole));
+        }
+
+        Instruction::F64FromOptionSentinelInt { signed } => {
+            let val = js.pop();
+            js.cx.expose_is_like_none();
+            js.assert_optional_number(&val);
+
+            // We need to convert the given number to a 32-bit integer before
+            // passing it to the ABI for 2 reasons:
+            // 1. Rust's behavior for `value_f64 as i32/u32` is different from
+            //    the WebAssembly behavior for values outside the 32-bit range.
+            //    We could implement this behavior in Rust too, but it's easier
+            //    to do it in JS.
+            // 2. If we allowed values outside the 32-bit range, the sentinel
+            //    value itself would be allowed. This would make it impossible
+            //    to distinguish between the sentinel value and a valid value.
+            //
+            // To perform the actual conversion, we use JS bit shifts. Handily,
+            // >> and >>> perform a conversion to i32 and u32 respectively
+            // to apply the bit shift, so we can use e.g. x >>> 0 to convert to
+            // u32.
+
+            let op = if *signed { ">>" } else { ">>>" };
+            js.push(format!("isLikeNone({val}) ? 0x100000001 : ({val}) {op} 0"));
+        }
+        Instruction::F64FromOptionSentinelF32 => {
+            let val = js.pop();
+            js.cx.expose_is_like_none();
+            js.assert_optional_number(&val);
+
+            // Similar to the above 32-bit integer variant, we convert the
+            // number to a 32-bit *float* before passing it to the ABI. This
+            // ensures consistent behavior with WebAssembly and makes it
+            // possible to use a sentinel value.
+
+            js.push(format!(
+                "isLikeNone({val}) ? 0x100000001 : Math.fround({val})"
+            ));
         }
 
         Instruction::FromOptionNative { ty } => {
@@ -1097,8 +1132,8 @@ fn instruction(
             // Then pass it the pointer and the length of where we copied it.
             js.push(format!("ptr{}", i));
             js.push(format!("len{}", i));
-            // Then we give wasm a reference to the original typed array, so that it can
-            // update it with modifications made on the wasm side before returning.
+            // Then we give Wasm a reference to the original typed array, so that it can
+            // update it with modifications made on the Wasm side before returning.
             js.push(val);
         }
 
@@ -1293,6 +1328,11 @@ fn instruction(
             ));
         }
 
+        Instruction::OptionF64Sentinel => {
+            let val = js.pop();
+            js.push(format!("{0} === 0x100000001 ? undefined : {0}", val));
+        }
+
         Instruction::OptionU32Sentinel => {
             let val = js.pop();
             js.push(format!("{0} === 0xFFFFFF ? undefined : {0}", val));
@@ -1448,7 +1488,7 @@ impl Invocation {
     }
 }
 
-fn adapter2ts(ty: &AdapterType, dst: &mut String) {
+fn adapter2ts(ty: &AdapterType, dst: &mut String, refs: Option<&mut HashSet<TsReference>>) {
     match ty {
         AdapterType::I32
         | AdapterType::S8
@@ -1466,13 +1506,19 @@ fn adapter2ts(ty: &AdapterType, dst: &mut String) {
         AdapterType::Bool => dst.push_str("boolean"),
         AdapterType::Vector(kind) => dst.push_str(&kind.js_ty()),
         AdapterType::Option(ty) => {
-            adapter2ts(ty, dst);
+            adapter2ts(ty, dst, refs);
             dst.push_str(" | undefined");
         }
         AdapterType::NamedExternref(name) => dst.push_str(name),
         AdapterType::Struct(name) => dst.push_str(name),
         AdapterType::Enum(name) => dst.push_str(name),
-        AdapterType::StringEnum(name) => dst.push_str(name),
+        AdapterType::StringEnum(name) => {
+            if let Some(refs) = refs {
+                refs.insert(TsReference::StringEnum(name.clone()));
+            }
+
+            dst.push_str(name);
+        }
         AdapterType::Function => dst.push_str("any"),
     }
 }

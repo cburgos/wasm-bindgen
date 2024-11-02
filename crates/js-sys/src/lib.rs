@@ -1387,6 +1387,16 @@ impl BigInt {
             .pow(JsValue::as_ref(rhs))
             .unchecked_into()
     }
+
+    /// Returns a tuple of this [`BigInt`]'s absolute value along with a
+    /// [`bool`] indicating whether the [`BigInt`] was negative.
+    fn abs(&self) -> (Self, bool) {
+        if self < &BigInt::from(0) {
+            (-self, true)
+        } else {
+            (self.clone(), false)
+        }
+    }
 }
 
 macro_rules! bigint_from {
@@ -1493,41 +1503,42 @@ impl fmt::Debug for BigInt {
 impl fmt::Display for BigInt {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad_integral(self >= &BigInt::from(0), "", &self.to_string_unchecked(10))
+        let (abs, is_neg) = self.abs();
+        f.pad_integral(!is_neg, "", &abs.to_string_unchecked(10))
     }
 }
 
 impl fmt::Binary for BigInt {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad_integral(self >= &BigInt::from(0), "0b", &self.to_string_unchecked(2))
+        let (abs, is_neg) = self.abs();
+        f.pad_integral(!is_neg, "0b", &abs.to_string_unchecked(2))
     }
 }
 
 impl fmt::Octal for BigInt {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad_integral(self >= &BigInt::from(0), "0o", &self.to_string_unchecked(8))
+        let (abs, is_neg) = self.abs();
+        f.pad_integral(!is_neg, "0o", &abs.to_string_unchecked(8))
     }
 }
 
 impl fmt::LowerHex for BigInt {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.pad_integral(
-            self >= &BigInt::from(0),
-            "0x",
-            &self.to_string_unchecked(16),
-        )
+        let (abs, is_neg) = self.abs();
+        f.pad_integral(!is_neg, "0x", &abs.to_string_unchecked(16))
     }
 }
 
 impl fmt::UpperHex for BigInt {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s: String = self.to_string_unchecked(16);
+        let (abs, is_neg) = self.abs();
+        let mut s: String = abs.to_string_unchecked(16);
         s.make_ascii_uppercase();
-        f.pad_integral(self >= &BigInt::from(0), "0x", &s)
+        f.pad_integral(!is_neg, "0x", &s)
     }
 }
 
@@ -2762,7 +2773,7 @@ impl Number {
     /// (without actually being zero).
     ///
     /// [MDN Documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/MIN_VALUE)
-    // Cannot use f64::MIN_POSITIVE since that is the smallest **normal** postitive number.
+    // Cannot use f64::MIN_POSITIVE since that is the smallest **normal** positive number.
     pub const MIN_VALUE: f64 = 5E-324;
     /// Special "Not a Number" value.
     ///
@@ -2835,7 +2846,7 @@ macro_rules! number_try_from {
             #[inline]
             fn try_from(x: $x) -> Result<Number, Self::Error> {
                 let x_f64 = x as f64;
-                if x_f64 >= Number::MIN_SAFE_INTEGER && x_f64 <= Number::MAX_SAFE_INTEGER {
+                if (Number::MIN_SAFE_INTEGER..=Number::MAX_SAFE_INTEGER).contains(&x_f64) {
                     Ok(Number::from(x_f64))
                 } else {
                     Err(TryFromIntError(()))
@@ -4395,7 +4406,7 @@ pub mod WebAssembly {
         /// The `WebAssembly.instantiateStreaming()` function compiles and
         /// instantiates a WebAssembly module directly from a streamed
         /// underlying source. This is the most efficient, optimized way to load
-        /// wasm code.
+        /// Wasm code.
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/instantiateStreaming)
         #[wasm_bindgen(js_namespace = WebAssembly, js_name = instantiateStreaming)]
@@ -4403,7 +4414,7 @@ pub mod WebAssembly {
 
         /// The `WebAssembly.validate()` function validates a given typed
         /// array of WebAssembly binary code, returning whether the bytes
-        /// form a valid wasm module (`true`) or not (`false`).
+        /// form a valid Wasm module (`true`) or not (`false`).
         ///
         /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WebAssembly/validate)
         #[wasm_bindgen(js_namespace = WebAssembly, catch)]
@@ -6272,7 +6283,7 @@ macro_rules! arrays {
             /// Rust pointer.
             ///
             /// This function will efficiently copy the memory from a typed
-            /// array into this wasm module's own linear memory, initializing
+            /// array into this Wasm module's own linear memory, initializing
             /// the memory destination provided.
             ///
             /// # Unsafety
@@ -6291,7 +6302,7 @@ macro_rules! arrays {
             /// Rust slice.
             ///
             /// This function will efficiently copy the memory from a typed
-            /// array into this wasm module's own linear memory, initializing
+            /// array into this Wasm module's own linear memory, initializing
             /// the memory destination provided.
             ///
             /// # Panics
@@ -6307,7 +6318,7 @@ macro_rules! arrays {
             /// JS typed array.
             ///
             /// This function will efficiently copy the memory from within
-            /// the wasm module's own linear memory to this typed array.
+            /// the Wasm module's own linear memory to this typed array.
             ///
             /// # Panics
             ///
